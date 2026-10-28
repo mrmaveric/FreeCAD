@@ -18,6 +18,8 @@ SET(Test_SRCS
     GuiRecompute.py
     TestApp.py
     TestLinkSuppression.py
+    TestSectionView.py
+    TestSectionViewGui.py
     TestIntPairList.py
     TestGui.py
     TestPySideUic.py

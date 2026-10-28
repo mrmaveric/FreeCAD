@@ -147,6 +147,7 @@
 #include "ViewProviderTextureExtension.h"
 #include "ViewProviderVRMLObject.h"
 #include "ViewProviderVarSet.h"
+#include "ViewProviderSectionView.h"
 #include "WaitCursor.h"
 #include "Workbench.h"
 #include "WorkbenchManager.h"
@@ -1045,6 +1046,7 @@ void Application::createStandardOperations()
     Gui::CreateStructureCommands();
     Gui::CreateTestCommands();
     Gui::CreateLinkCommands();
+    Gui::CreateSectionCommands();
 }
 
 void Application::slotNewDocument(const App::Document& Doc, bool isMainDoc)
@@ -2448,6 +2450,7 @@ void Application::initTypes()
     Gui::ViewProviderLink                       ::init();
     Gui::ViewProviderLinkPython                 ::init();
     Gui::ViewProviderVarSet                     ::init();
+    Gui::ViewProviderSectionView                ::init();
     Gui::AxisOrigin                             ::init();
 
     // Workbench

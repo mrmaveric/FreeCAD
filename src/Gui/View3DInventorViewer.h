@@ -104,6 +104,7 @@ class ViewProvider;
 class SoFCBackgroundGradient;
 class NavigationStyle;
 class SoFCUnifiedSelection;
+class SoFCSectionRoot;
 class Document;
 class GLGraphicsItem;
 class RubberbandOverlay;
@@ -468,6 +469,11 @@ public:
     /** Checks whether a clipping plane is set or not. */
     bool hasClippingPlane() const;
 
+    /** Returns the root of the physical objects, which renders the section view. */
+    SoFCSectionRoot* getSectionRoot() const;
+    /** Returns the group holding the view providers of the physical objects. */
+    SoGroup* getObjectGroup() const;
+
     /** Project the given normalized 2d point onto the near plane */
     SbVec3f projectOnNearPlane(const SbVec2f&) const;
 
@@ -688,6 +694,8 @@ private:
     SoSeparator* pcViewProviderRoot;
     // Child group in the scene graph that contains view providers related to the physical object
     SoGroup* objectGroup;
+    // Parent of objectGroup applying the section view
+    SoFCSectionRoot* sectionRoot;
 
     std::unique_ptr<View3DInventorSelection> inventorSelection;
 

@@ -425,6 +425,7 @@ SET(Command_CPP_SRCS
     CommandTest.cpp
     CommandView.cpp
     CommandStructure.cpp
+    CommandSection.cpp
     CommandLink.cpp
     CommandPyImp.cpp
     ShortcutManager.cpp
@@ -471,6 +472,7 @@ SET(Dialog_CPP_SRCS
     TaskDlgRelocation.cpp
     Dialogs/DlgCheckableMessageBox.cpp
     TaskTransform.cpp
+    TaskSectionView.cpp
     TaskCommandLink.cpp
     Dialogs/DlgUndoRedo.cpp
     InputVector.cpp
@@ -515,6 +517,7 @@ SET(Dialog_HPP_SRCS
     Dialogs/DlgVersionMigrator.h
     TaskDlgRelocation.h
     TaskTransform.h
+    TaskSectionView.h
     TaskCommandLink.h
     Dialogs/DlgUndoRedo.h
     InputVector.h
@@ -976,6 +979,7 @@ SET(Viewprovider_CPP_SRCS
     LinkViewPyImp.cpp
     ViewProviderLinkPyImp.cpp
     ViewProviderVarSet.cpp
+    ViewProviderSectionView.cpp
     AxisOriginPyImp.cpp
     AxisOrigin.cpp
 )
@@ -1012,6 +1016,7 @@ SET(Viewprovider_SRCS
     ViewProviderTextureExtension.h
     ViewProviderLink.h
     ViewProviderVarSet.h
+    ViewProviderSectionView.h
     AxisOrigin.h
 )
 SOURCE_GROUP("View3D\\Viewprovider" FILES ${Viewprovider_SRCS})
@@ -1103,6 +1108,20 @@ SET(Inventor_SRCS
     ArcEngine.h
 )
 SOURCE_GROUP("View3D\\Inventor" FILES ${Inventor_SRCS})
+
+# The section view sources
+SET(Section_CPP_SRCS
+    Section/SectionGeometry.cpp
+    Section/SectionScene.cpp
+    Section/SoFCSectionNodes.cpp
+)
+SET(Section_SRCS
+    ${Section_CPP_SRCS}
+    Section/SectionGeometry.h
+    Section/SectionScene.h
+    Section/SoFCSectionNodes.h
+)
+SOURCE_GROUP("View3D\\Section" FILES ${Section_SRCS})
 
 # The widget sources
 SET(Widget_CPP_SRCS
@@ -1395,6 +1414,7 @@ SET(FreeCADGui_SRCS
     ${Editor_SRCS}
     ${Help_SRCS}
     ${Inventor_CPP_SRCS}
+    ${Section_SRCS}
     ${Language_SRCS}
     ${Propertyeditor_SRCS}
     ${Task_View_SRCS}
@@ -1434,6 +1454,7 @@ if(MSVC)
         ${Editor_CPP_SRCS}
         ${Help_CPP_SRCS}
         ${Inventor_CPP_SRCS}
+        ${Section_CPP_SRCS}
         ${View3D_CPP_SRCS}
         ${Viewprovider_CPP_SRCS}
         ${Widget_CPP_SRCS}

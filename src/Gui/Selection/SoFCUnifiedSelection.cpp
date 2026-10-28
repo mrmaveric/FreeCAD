@@ -90,6 +90,8 @@
 #include "MainWindow.h"
 #include "SoFCInteractiveElement.h"
 #include "SoFCSelectionAction.h"
+#include "Section/SectionScene.h"
+#include "Section/SoFCSectionNodes.h"
 #include "ViewParams.h"
 #include "ViewProvider.h"
 #include "ViewProviderDocumentObject.h"
@@ -409,8 +411,17 @@ std::vector<SoFCUnifiedSelection::PickedInfo> SoFCUnifiedSelection::getPickedLis
         info.vpd = nullptr;
         ViewProvider* vp = nullptr;
         auto path = Gui::toFullPath(info.pp->getPath());
+        // Cut faces of a section view select the object they belong to
+        std::string capSubname;
+        App::DocumentObject* capObject = nullptr;
         if (this->pcDocument && path && path->containsPath(action->getCurPath())) {
             vp = this->pcDocument->getViewProviderByPathFromHead(path);
+            if (!vp) {
+                capObject = Section::SectionScene::resolvePickedCap(path, capSubname);
+                if (capObject) {
+                    vp = Application::Instance->getViewProvider(capObject);
+                }
+            }
             if (singlePick && last_vp && last_vp != vp && canFinalizeSinglePick(ret)) {
                 break;
             }
@@ -436,7 +447,10 @@ std::vector<SoFCUnifiedSelection::PickedInfo> SoFCUnifiedSelection::getPickedLis
             }
             break;
         }
-        if (!info.vpd->getElementPicked(info.pp, info.element)) {
+        if (capObject) {
+            info.element = capSubname;
+        }
+        else if (!info.vpd->getElementPicked(info.pp, info.element)) {
             continue;
         }
 
@@ -1734,6 +1748,11 @@ void SoFCSelectionRoot::renderPrivate(SoGLRenderAction* action, bool inPath)
         return;
     }
     SelStack.push_back(this);
+    if (!SoFCSectionPass::traverseRoot(action, SelStack)) {
+        SelStack.pop_back();
+        SelStack.nodeSet.erase(this);
+        return;
+    }
     if (_renderPrivate(action, inPath)) {
         if (inPath) {
             SoSeparator::GLRenderInPath(action);
@@ -1971,7 +1990,7 @@ void SoFCSelectionRoot::moveActionStack(SoAction* from, SoAction* to, bool erase
 void SoFCSelectionRoot::pick(SoPickAction* action)
 {
     BEGIN_ACTION;
-    if (doActionPrivate(stack, action)) {
+    if (SoFCSectionPass::traverseRoot(action, stack) && doActionPrivate(stack, action)) {
         inherited::pick(action);
     }
     END_ACTION;
@@ -1980,7 +1999,7 @@ void SoFCSelectionRoot::pick(SoPickAction* action)
 void SoFCSelectionRoot::rayPick(SoRayPickAction* action)
 {
     BEGIN_ACTION;
-    if (doActionPrivate(stack, action)) {
+    if (SoFCSectionPass::traverseRoot(action, stack) && doActionPrivate(stack, action)) {
         inherited::rayPick(action);
     }
     END_ACTION;
@@ -2028,7 +2047,10 @@ void SoFCSelectionRoot::getMatrix(SoGetMatrixAction* action)
 void SoFCSelectionRoot::callback(SoCallbackAction* action)
 {
     BEGIN_ACTION;
-    inherited::callback(action);
+    // Skip hidden sub-objects, like the other actions do
+    if (doActionPrivate(stack, action)) {
+        inherited::callback(action);
+    }
     END_ACTION;
 }
 

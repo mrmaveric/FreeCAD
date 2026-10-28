@@ -448,6 +448,11 @@ public:
         overrideColor = false;
     }
 
+    Base::Color getColorOverride() const
+    {
+        return Base::Color(colorOverride[0], colorOverride[1], colorOverride[2], 1.0F - transOverride);
+    }
+
     enum SelectStyles
     {
         Full,

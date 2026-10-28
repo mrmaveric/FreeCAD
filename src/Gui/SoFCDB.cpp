@@ -84,6 +84,7 @@
 #include "Inventor/SoMouseWheelEvent.h"
 #include "Inventor/SoFCTransform.h"
 #include "Inventor/SoToggleSwitch.h"
+#include "Section/SoFCSectionNodes.h"
 #include "propertyeditor/PropertyItem.h"
 #include "ArcEngine.h"
 
@@ -166,6 +167,8 @@ void Gui::SoFCDB::init()
     SmSwitchboard::initClass();
     SoFCSeparator::initClass();
     SoFCSelectionRoot::initClass();
+    SoFCSectionPass::initClass();
+    SoFCSectionRoot::initClass();
     SoFCPathAnnotation::initClass();
     SoMouseWheelEvent::initClass();
     So3DAnnotation::initClass();
@@ -261,6 +264,8 @@ void Gui::SoFCDB::finish()
     SoFCHighlightColorAction::finish();
     SoFCSeparator::finish();
     SoFCSelectionRoot::finish();
+    SoFCSectionPass::finish();
+    SoFCSectionRoot::finish();
     SoFCPathAnnotation::finish();
 
     storage->unref();
