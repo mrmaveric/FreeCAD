@@ -3032,6 +3032,11 @@ void MainWindow::setWindowTitle(const QString& string)
     }
     else {
         title = appname;
+        // a build with own changes stays recognisable without the version
+        const std::string& edition = App::Application::Config()["BuildEdition"];
+        if (!edition.empty()) {
+            title = QStringLiteral("%1 (%2)").arg(title, QString::fromStdString(edition));
+        }
     }
 
     if (SafeMode::SafeModeEnabled()) {

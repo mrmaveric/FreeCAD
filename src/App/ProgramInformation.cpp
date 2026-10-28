@@ -241,6 +241,9 @@ void ProgramInformation::getVersionInformation(
     const auto suffix = getValueOrEmpty(mConfig, "BuildVersionSuffix");
     const auto build = getValueOrEmpty(mConfig, "BuildRevision");
     str << "Version: " << major << "." << minor << "." << point << suffix << "." << build;
+    if (const auto edition = getValueOrEmpty(mConfig, "BuildEdition"); !edition.empty()) {
+        str << " (" << edition << ")";
+    }
 }
 
 void ProgramInformation::getBuildInformation(

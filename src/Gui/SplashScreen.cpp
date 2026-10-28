@@ -380,11 +380,8 @@ QPixmap SplashScreen::splashImage()
     );
     if (tc != App::Application::Config().end() && wc != App::Application::Config().end()) {
         QString title = qApp->applicationName();
-        const std::string major = App::Application::Config()["BuildVersionMajor"];
-        const std::string minor = App::Application::Config()["BuildVersionMinor"];
-        const std::string point = App::Application::Config()["BuildVersionPoint"];
         const std::string suffix = App::Application::Config()["BuildVersionSuffix"];
-        std::string version = std::format("{}.{}.{}{}", major, minor, point, suffix);
+        std::string version = App::Application::getVersionString();
         QString position, fontFamily;
 
         std::map<std::string, std::string>::const_iterator te = App::Application::Config().find(

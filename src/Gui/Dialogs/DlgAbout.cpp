@@ -209,10 +209,6 @@ void AboutDialog::setupLabels()
     std::map<std::string, std::string>::iterator it;
     QString banner = QString::fromStdString(config["CopyrightInfo"]);
     banner = banner.left(banner.indexOf(QLatin1Char('\n')));
-    QString major = QString::fromStdString(config["BuildVersionMajor"]);
-    QString minor = QString::fromStdString(config["BuildVersionMinor"]);
-    QString point = QString::fromStdString(config["BuildVersionPoint"]);
-    QString suffix = QString::fromStdString(config["BuildVersionSuffix"]);
     QString build = QString::fromStdString(config["BuildRevision"]);
     QString disda = QString::fromStdString(config["BuildRevisionDate"]);
     QString mturl = QString::fromStdString(config["MaintainerUrl"]);
@@ -235,7 +231,7 @@ void AboutDialog::setupLabels()
     QString version = ui->labelBuildVersion->text();
     version.replace(
         QStringLiteral("Unknown"),
-        QStringLiteral("%1.%2.%3%4").arg(major, minor, point, suffix)
+        QString::fromStdString(App::Application::getVersionString())
     );
     ui->labelBuildVersion->setText(version);
 

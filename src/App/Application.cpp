@@ -1370,12 +1370,23 @@ std::string Application::getExecutableName()
 std::string Application::getNameWithVersion()
 {
     auto appname = QCoreApplication::applicationName().toStdString();
+    return std::format("{} {}", appname, getVersionString());
+}
+
+std::string Application::getVersionString()
+{
     auto config = Application::Config();
-    auto major = config["BuildVersionMajor"];
-    auto minor = config["BuildVersionMinor"];
-    auto point = config["BuildVersionPoint"];
-    auto suffix = config["BuildVersionSuffix"];
-    return std::format("{} {}.{}.{}{}", appname, major, minor, point, suffix);
+    auto version = std::format(
+        "{}.{}.{}{}",
+        config["BuildVersionMajor"],
+        config["BuildVersionMinor"],
+        config["BuildVersionPoint"],
+        config["BuildVersionSuffix"]
+    );
+    if (const auto& edition = config["BuildEdition"]; !edition.empty()) {
+        version += std::format(" ({})", edition);
+    }
+    return version;
 }
 
 bool Application::isDevelopmentVersion()

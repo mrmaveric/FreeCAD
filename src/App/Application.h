@@ -797,6 +797,15 @@ public:
     /// Get the executable name with version information.
     static std::string getNameWithVersion();
 
+    /**
+     * @brief Get the version for display.
+     *
+     * Builds that are packaged with own changes can set the configuration key
+     * "BuildEdition", e.g. with `--set-config "BuildEdition=My Edition"`. It is
+     * shown after the version, like "1.2.3 (My Edition)".
+     */
+    static std::string getVersionString();
+
     /// Check whether this is a development version.
     static bool isDevelopmentVersion();
 

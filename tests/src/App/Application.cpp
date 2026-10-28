@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 
 #include <gtest/gtest.h>
+
+#include <format>
 #define FC_OS_MACOSX 1
 #include "App/ProgramOptionsUtilities.h"
+#include "App/Application.h"
 
 #include <src/App/InitApplication.h>
 
@@ -57,3 +60,24 @@ TEST_F(ApplicationTest, fCustomSyntaxEmptyIn)
     Spr exp {"", ""};
     EXPECT_EQ(res, exp);
 };
+
+TEST_F(ApplicationTest, versionStringShowsEdition)
+{
+    auto& config = App::Application::Config();
+    const std::string plain = std::format(
+        "{}.{}.{}{}",
+        config["BuildVersionMajor"],
+        config["BuildVersionMinor"],
+        config["BuildVersionPoint"],
+        config["BuildVersionSuffix"]
+    );
+
+    config.erase("BuildEdition");
+    EXPECT_EQ(App::Application::getVersionString(), plain);
+    EXPECT_TRUE(App::Application::getNameWithVersion().ends_with(" " + plain));
+
+    config["BuildEdition"] = "Test Edition";
+    EXPECT_EQ(App::Application::getVersionString(), plain + " (Test Edition)");
+    EXPECT_TRUE(App::Application::getNameWithVersion().ends_with(plain + " (Test Edition)"));
+    config.erase("BuildEdition");
+}

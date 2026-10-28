@@ -49,6 +49,7 @@ Branding::Branding()
     filter.push_back("BuildRevision");
     filter.push_back("BuildRevisionDate");
     filter.push_back("BuildVersionSuffix");
+    filter.push_back("BuildEdition");
     filter.push_back("BuildRepositoryURL");
 
     filter.push_back("AboutImage");
