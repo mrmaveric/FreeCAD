@@ -1,0 +1,581 @@
+#!/usr/bin/env bash
+# freecad-james-update - install and update FreeCAD (James Edition)
+#
+# FreeCAD (James Edition) is FreeCAD with the section view feature. The GitHub
+# workflow of the repository (see README.md) builds it for every FreeCAD
+# release. This tool downloads those builds as AppImages and installs them
+# with a launcher and a menu entry. It can also build a release on this
+# computer, e.g. to try feature commits before pushing them.
+#
+# Run "freecad-james-update --help" for usage.
+
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+TOOLING="$(dirname "$SELF")"
+# shellcheck source=packaging/james.sh
+source "$TOOLING/packaging/james.sh"
+
+ROOT="${FREECAD_JAMES_ROOT:-$HOME/.local/opt/freecad-james}"
+
+# Defaults, can be overridden in $ROOT/config (a bash snippet)
+PATCH_REPO="$HOME/temp/FreeCAD"  # local builds: clone with the feature branch
+KEEP=3                           # number of AppImages to keep
+KEEP_SOURCES=1                   # number of source trees of local builds to keep
+JOBS="$(nproc)"
+
+if [[ -f "$ROOT/config" ]]; then
+    # shellcheck source=/dev/null
+    source "$ROOT/config"
+fi
+# Without the development clone, local builds use the feature branch on GitHub
+if [[ ! -d "$PATCH_REPO" && "$PATCH_REPO" != *://* ]]; then
+    PATCH_REPO="https://github.com/$GITHUB_REPO.git"
+fi
+
+REPO="$ROOT/repo"
+SOURCES="$ROOT/src"
+APPIMAGES="$ROOT/appimages"
+CURRENT="$ROOT/current.AppImage"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+BIN_DIR="$HOME/.local/bin"
+APPS_DIR="$DATA_HOME/applications"
+ICON_FILE="$DATA_HOME/icons/hicolor/scalable/apps/$APP_ID.svg"
+MIME_DIR="$DATA_HOME/mime"
+SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+ARCH="$(uname -m)"
+export GIT_TERMINAL_PROMPT=0
+
+usage() {
+    cat <<EOF
+Usage: freecad-james-update [COMMAND] [OPTIONS]
+
+Installing the builds published on GitHub:
+  update [BUILD]     Install the newest build, or BUILD (e.g. 26.3-james.1, or
+                     26.3 for its newest build), and make it current. The
+                     default command. Never goes back to an older FreeCAD
+                     release unless BUILD is given.
+      --pre          Include builds of release candidates. They are also used
+                     while there is no build of a final release.
+      --no-switch    Download only, don't make it the current one.
+  check [--notify]   Tell whether there is a newer build. Exits with 10 if so.
+  list               List the installed AppImages, * marks the current one.
+  use BUILD          Make an installed AppImage the current one.
+  remove BUILD       Delete an AppImage (and the source tree of a local build).
+  desktop            Reinstall the launcher, menu entry and icon.
+  timer on|off       Check weekly for new builds and show a notification.
+  default-app        Open .FCStd files with $APP_NAME by default.
+
+Building on this computer (needs pixi):
+  build [VERSION]    Build FreeCAD VERSION (a release tag such as 26.3), or the
+                     newest release, with the feature commits of $FEATURE_BRANCH
+                     from $PATCH_REPO, as build VERSION-local.
+      --pre          Include release candidates when choosing the newest release.
+      --rebuild      Build again even if the AppImage is up to date.
+      --resume       Don't apply the feature again, build the source tree as it
+                     is. Use this after resolving conflicts by hand.
+      --no-tests     Skip the tests.
+      --no-switch    Don't make the new AppImage the current one.
+  publish VERSION    Push the source tree of a local build to GitHub as branch
+                     james/VERSION and build it there, e.g. after resolving
+                     conflicts. Needs the GitHub CLI (gh).
+  ci [VERSION]       Start the GitHub build now instead of waiting for the daily
+                     check. --rebuild builds even without new feature commits.
+
+Builds come from https://github.com/$GITHUB_REPO/releases.
+The AppImages are in $APPIMAGES and run on any recent x86-64 Linux.
+Settings like KEEP, PATCH_REPO and JOBS can be put in $ROOT/config.
+EOF
+}
+
+need() {
+    local tool
+    for tool in "$@"; do
+        command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
+    done
+}
+
+in_container() { [[ -f /run/.containerenv || -f /.dockerenv ]]; }
+
+# Desktop integration commands must run where the desktop session is
+host_run() {
+    if in_container && command -v distrobox-host-exec >/dev/null 2>&1; then
+        distrobox-host-exec "$@"
+    else
+        "$@"
+    fi
+}
+
+host_has() { host_run sh -c "command -v '$1' >/dev/null 2>&1"; }
+
+# Builds are named after their GitHub release (26.3-james.1), or VERSION-local
+appimage_of() { echo "$APPIMAGES/$(appimage_name "$1")"; }
+
+build_of_appimage() {
+    local name
+    name="$(basename "$1" .AppImage)"
+    name="${name#"${FILE_PREFIX}-"}"
+    echo "${name%"-$ARCH"}"
+}
+
+freecad_version_of() { echo "${1%%-*}"; }
+
+current_build() {
+    [[ -L "$CURRENT" && -e "$CURRENT" ]] && build_of_appimage "$(readlink -f "$CURRENT")" || true
+}
+
+# Gets the newest tooling, and runs it if it changed
+self_update() {
+    [[ -d "$TOOLING/.git" && -z "${JAMES_NO_SELF_UPDATE:-}" ]] || return 0
+    local before
+    before="$(git -C "$TOOLING" rev-parse HEAD)"
+    if ! git -C "$TOOLING" pull --quiet --ff-only 2>/dev/null; then
+        warn "Couldn't update the tooling in $TOOLING"
+        return 0
+    fi
+    if [[ "$(git -C "$TOOLING" rev-parse HEAD)" != "$before" ]]; then
+        log "Updated freecad-james-update"
+        JAMES_NO_SELF_UPDATE=1 exec "$SELF" "$@"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Published builds
+
+# Lines "BUILD PRERELEASE APPIMAGE_URL SUMS_URL" of the builds on GitHub
+github_builds() {
+    curl -fsSL -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/$GITHUB_REPO/releases?per_page=100" \
+        | python3 -c '
+import json, sys
+suffix = sys.argv[1]
+for release in json.load(sys.stdin):
+    if release["draft"]:
+        continue
+    assets = {a["name"]: a["browser_download_url"] for a in release["assets"]}
+    appimages = [url for name, url in assets.items() if name.endswith(suffix)]
+    if appimages:
+        print(release["tag_name"], str(release["prerelease"]).lower(), appimages[0],
+              assets.get("SHA256SUMS", "-"))
+' "-$ARCH.AppImage"
+}
+
+# Chooses a build from github_builds: the newest one, or the newest one of
+# $2 (a build or a FreeCAD version). Release candidates only with $1 = 1, or
+# when there is no build of a final release.
+choose_build() {
+    local pre="$1" want="${2:-}" lines best="" best_pre="" build prerelease url sums
+    lines="$(github_builds)" || die "Couldn't get the builds from GitHub"
+    while read -r build prerelease url sums; do
+        [[ -n "$build" ]] || continue
+        if [[ -n "$want" && "$build" != "$want" && "$build" != "$want-james."* ]]; then
+            continue
+        fi
+        if [[ "$prerelease" == "true" && "$pre" != 1 && -z "$want" ]]; then
+            if [[ -z "$best_pre" ]] || version_gt "$build" "${best_pre%% *}"; then
+                best_pre="$build $url $sums"
+            fi
+            continue
+        fi
+        if [[ -z "$best" ]] || version_gt "$build" "${best%% *}"; then
+            best="$build $url $sums"
+        fi
+    done <<<"$lines"
+    if [[ -z "$best" && -n "$best_pre" ]]; then
+        warn "There is no build of a final FreeCAD release yet, using a release candidate"
+        best="$best_pre"
+    fi
+    echo "$best"
+}
+
+download_build() {
+    local build="$1" url="$2" sums="$3" file part expected
+    file="$(appimage_of "$build")"
+    part="$file.part"
+    mkdir -p "$APPIMAGES"
+    log "Downloading $(basename "$file")"
+    curl -fL --progress-bar -o "$part" "$url"
+    if [[ "$sums" != "-" ]]; then
+        expected="$(curl -fsSL "$sums" | awk -v name="$(basename "$file")" '$2 == name {print $1}')"
+        [[ -n "$expected" ]] || die "$(basename "$file") is missing in SHA256SUMS"
+        [[ "$(sha256sum "$part" | cut -d' ' -f1)" == "$expected" ]] \
+            || { rm -f "$part"; die "The download is damaged (checksum mismatch)"; }
+    fi
+    chmod +x "$part"
+    mv -f "$part" "$file"
+}
+
+cmd_update() {
+    local pre=0 switch=1 want=""
+    while (($#)); do
+        case "$1" in
+            --pre) pre=1 ;;
+            --no-switch) switch=0 ;;
+            -*) die "Unknown option $1" ;;
+            *) want="$1" ;;
+        esac
+        shift
+    done
+    need curl python3 sha256sum
+
+    local chosen build url sums current
+    chosen="$(choose_build "$pre" "$want")"
+    [[ -n "$chosen" ]] || die "No build${want:+ of $want} found on https://github.com/$GITHUB_REPO/releases"
+    read -r build url sums <<<"$chosen"
+    current="$(current_build)"
+
+    if [[ "$build" == "$current" ]]; then
+        log "$APP_NAME $build is installed and current"
+        return 0
+    fi
+    if [[ -z "$want" && -n "$current" ]] \
+        && version_gt "$(freecad_version_of "$current")" "$(freecad_version_of "$build")"; then
+        log "The current build $current is newer than the newest published build $build"
+        return 0
+    fi
+    [[ -f "$(appimage_of "$build")" ]] || download_build "$build" "$url" "$sums"
+    if ((switch)); then
+        make_current "$build"
+    fi
+    prune
+}
+
+cmd_check() {
+    local notify=0 chosen build current
+    [[ "${1:-}" == "--notify" ]] && notify=1
+    need curl python3
+    current="$(current_build)"
+    # Release candidates count when one is installed
+    chosen="$(choose_build "$([[ "$current" == *rc* ]] && echo 1 || echo 0)" 2>/dev/null)"
+    build="${chosen%% *}"
+    if [[ -z "$build" ]]; then
+        echo "There are no builds on https://github.com/$GITHUB_REPO/releases"
+        return 0
+    elif [[ -z "$current" ]]; then
+        echo "Nothing is installed, the newest build is $build"
+    elif [[ "$build" == "$current" ]] || ! version_gt "$build" "$current"; then
+        echo "$current is up to date"
+        return 0
+    else
+        echo "$build is available, $current is installed"
+    fi
+    if ((notify)) && host_has notify-send; then
+        host_run notify-send -a "$APP_NAME" -i "$ICON_FILE" "$APP_NAME $build is available" \
+            "Run freecad-james-update to install it." || true
+    fi
+    return 10
+}
+
+# ---------------------------------------------------------------------------
+# Local builds
+
+ensure_repo() {
+    if [[ ! -d "$REPO/.git" ]]; then
+        log "Cloning FreeCAD into $REPO"
+        mkdir -p "$ROOT"
+        git clone --filter=blob:none --no-checkout "$UPSTREAM" "$REPO"
+    fi
+    git -C "$REPO" config rerere.enabled true
+    git -C "$REPO" config rerere.autoUpdate true
+}
+
+fetch() {
+    log "Fetching FreeCAD releases"
+    git -C "$REPO" fetch --quiet --prune --tags origin "+refs/heads/main:refs/remotes/origin/main"
+    log "Fetching $FEATURE_BRANCH from $PATCH_REPO"
+    git -C "$REPO" fetch --quiet --no-tags "$PATCH_REPO" \
+        "+refs/heads/$FEATURE_BRANCH:refs/remotes/patch/feature"
+}
+
+newest_release() {
+    local regex="$STABLE_REGEX"
+    [[ "$1" == 1 ]] && regex="$PRE_REGEX"
+    git -C "$REPO" tag --list | grep -E "$regex" | sort_versions | tail -n 1
+}
+
+cmd_build() {
+    local version="" pre=0 rebuild=0 resume=0 tests=1 switch=1
+    while (($#)); do
+        case "$1" in
+            --pre) pre=1 ;;
+            --rebuild) rebuild=1 ;;
+            --resume) resume=1 ;;
+            --no-tests) tests=0 ;;
+            --no-switch) switch=0 ;;
+            -*) die "Unknown option $1" ;;
+            *) version="$1" ;;
+        esac
+        shift
+    done
+    need git curl flock
+    [[ -x "$PIXI" ]] || die "pixi is required, see https://pixi.sh"
+
+    mkdir -p "$ROOT" "$SOURCES"
+    exec 9>"$ROOT/.lock"
+    flock -n 9 || die "Another build is running"
+
+    ensure_repo
+    fetch
+    [[ -n "$version" ]] || version="$(newest_release "$pre")"
+    git -C "$REPO" rev-parse -q --verify "refs/tags/$version" >/dev/null \
+        || die "$version is not a FreeCAD release tag"
+
+    local build="$version-local" wt="$SOURCES/$version" stamp appimage
+    stamp="$(feature_stamp "$REPO" "$version")"
+    appimage="$(appimage_of "$build")"
+    if ((!rebuild && !resume)) && [[ -f "$appimage" && "$(cat "$appimage.stamp" 2>/dev/null)" == "$stamp" ]]; then
+        log "FreeCAD $version with the current feature commits is already built"
+    else
+        if [[ ! -d "$wt" ]]; then
+            log "Creating the source tree of FreeCAD $version"
+            git -C "$REPO" worktree add --quiet -f -B "james/$version" "$wt" "refs/tags/$version"
+        fi
+        if ((resume)); then
+            git -C "$wt" rev-parse -q --verify CHERRY_PICK_HEAD >/dev/null \
+                && die "Finish the cherry-pick in $wt first"
+        elif [[ "$(cat "$wt/.james-applied" 2>/dev/null)" != "$stamp" ]]; then
+            if ! apply_feature "$wt" "$version"; then
+                cat >&2 <<EOF
+
+The feature commits conflict with FreeCAD $version. To fix it:
+  cd $wt
+  # edit the conflicting files listed by 'git status', then
+  git add <files> && git cherry-pick --continue
+  freecad-james-update build $version --resume
+  freecad-james-update publish $version    # to build it on GitHub too
+
+The resolution is remembered for later releases. To give up instead:
+  git -C $wt cherry-pick --abort
+EOF
+                die "Conflicts with FreeCAD $version"
+            fi
+        fi
+        # Applying again would touch the files and make the build start over
+        echo "$stamp" >"$wt/.james-applied"
+
+        log "Building FreeCAD $version, this takes a while (log: $wt/.james-build.log)"
+        build_source "$wt" >"$wt/.james-build.log" 2>&1 \
+            || { tail -n 40 "$wt/.james-build.log" >&2; die "Build failed, see $wt/.james-build.log"; }
+        log "Packaging $(basename "$appimage") (log: $wt/.james-bundle.log)"
+        bundle_linux "$wt" "$build" "$APPIMAGES" >"$wt/.james-bundle.log" 2>&1 \
+            || { tail -n 40 "$wt/.james-bundle.log" >&2; die "Packaging failed, see $wt/.james-bundle.log"; }
+        if ((tests)); then
+            log "Testing the AppImage"
+            test_appimage "$appimage" || die "The AppImage failed its tests"
+        fi
+        echo "$stamp" >"$appimage.stamp"
+        log "Built $appimage"
+    fi
+
+    if ((switch)); then
+        make_current "$build"
+    fi
+    prune
+}
+
+cmd_publish() {
+    local version="${1:-}" wt
+    [[ -n "$version" ]] || die "Which version?"
+    wt="$SOURCES/$version"
+    [[ -d "$wt" ]] || die "There is no source tree of FreeCAD $version, run 'freecad-james-update build $version' first"
+    git -C "$wt" rev-parse -q --verify CHERRY_PICK_HEAD >/dev/null && die "Finish the cherry-pick in $wt first"
+    [[ -z "$(git -C "$wt" status --porcelain --untracked-files=no)" ]] || die "$wt has uncommitted changes"
+    need gh
+    log "Pushing the source of FreeCAD $version to branch james/$version of $GITHUB_REPO"
+    git -C "$wt" push --force --quiet "https://github.com/$GITHUB_REPO.git" "HEAD:refs/heads/james/$version"
+    cmd_ci "$version" --rebuild
+}
+
+cmd_ci() {
+    local -a fields=()
+    local rebuild=false
+    while (($#)); do
+        case "$1" in
+            --rebuild) rebuild=true ;;
+            -*) die "Unknown option $1" ;;
+            *) fields+=(-f "version=$1") ;;
+        esac
+        shift
+    done
+    need gh
+    gh workflow run release.yml -R "$GITHUB_REPO" --ref james "${fields[@]}" -f "rebuild=$rebuild"
+    log "Started the build, follow it on https://github.com/$GITHUB_REPO/actions"
+}
+
+# ---------------------------------------------------------------------------
+# Installed builds
+
+install_desktop() {
+    local build="$1"
+    mkdir -p "$BIN_DIR" "$APPS_DIR" "$MIME_DIR/packages" "$(dirname "$ICON_FILE")"
+
+    cat >"$BIN_DIR/freecad-james" <<EOF
+#!/usr/bin/env bash
+# Starts the current $APP_NAME AppImage, see freecad-james-update.
+APPIMAGE="\${FREECAD_JAMES_ROOT:-$ROOT}/current.AppImage"
+if [[ ! -e "\$APPIMAGE" ]]; then
+    echo "No $APP_NAME is installed, run freecad-james-update." >&2
+    exit 1
+fi
+# Without FUSE, e.g. in some containers, unpack on the fly
+if [[ ! -e /dev/fuse ]] || { ! command -v fusermount3 && ! command -v fusermount; } >/dev/null; then
+    export APPIMAGE_EXTRACT_AND_RUN=1
+fi
+exec "\$APPIMAGE" "\$@"
+EOF
+    chmod +x "$BIN_DIR/freecad-james"
+    ln -sfn "$SELF" "$BIN_DIR/freecad-james-update"
+
+    cp -f "$JAMES_DIR/freecad-james.svg" "$ICON_FILE"
+    cp -f "$JAMES_DIR/freecad-james-mime.xml" "$MIME_DIR/packages/$APP_ID.xml"
+    desktop_entry "$BIN_DIR/freecad-james --single-instance %F" "$ICON_FILE" "$build" \
+        >"$APPS_DIR/$APP_ID.desktop"
+
+    # Refresh the menus of the desktop session
+    if host_has update-mime-database; then host_run update-mime-database "$MIME_DIR" || true; fi
+    if host_has update-desktop-database; then host_run update-desktop-database "$APPS_DIR" || true; fi
+    if host_has kbuildsycoca6; then host_run kbuildsycoca6 >/dev/null 2>&1 || true; fi
+}
+
+make_current() {
+    ln -sfn "$(appimage_of "$1")" "$CURRENT"
+    install_desktop "$1"
+    log "$APP_NAME is now $1"
+}
+
+prune() {
+    local current b f
+    current="$(current_build)"
+    local -a keep
+    mapfile -t keep < <(for f in "$APPIMAGES"/*.AppImage; do
+        [[ -e "$f" ]] && build_of_appimage "$f"
+    done | sort_versions | tail -n "$KEEP")
+    for f in "$APPIMAGES"/*.AppImage; do
+        [[ -e "$f" ]] || continue
+        b="$(build_of_appimage "$f")"
+        [[ "$b" == "$current" ]] && continue
+        printf '%s\n' "${keep[@]}" | grep -qxF "$b" && continue
+        log "Removing the old AppImage $b"
+        rm -f "$f" "$f.stamp"
+    done
+    # Source trees of local builds, only needed to build again
+    [[ -d "$SOURCES" ]] || return 0
+    mapfile -t keep < <(ls -1 "$SOURCES" | sort_versions | tail -n "$KEEP_SOURCES")
+    for f in "$SOURCES"/*; do
+        [[ -d "$f" ]] || continue
+        printf '%s\n' "${keep[@]}" | grep -qxF "${f##*/}" && continue
+        remove_source "${f##*/}"
+    done
+}
+
+remove_source() {
+    [[ -d "$SOURCES/$1" ]] || return 0
+    log "Removing the source tree of FreeCAD $1"
+    git -C "$REPO" worktree remove --force "$SOURCES/$1" 2>/dev/null || rm -rf "${SOURCES:?}/$1"
+    git -C "$REPO" branch -D "james/$1" >/dev/null 2>&1 || true
+    git -C "$REPO" worktree prune 2>/dev/null || true
+}
+
+cmd_list() {
+    local current b f
+    current="$(current_build)"
+    for f in "$APPIMAGES"/*.AppImage; do
+        [[ -e "$f" ]] || continue
+        b="$(build_of_appimage "$f")"
+        printf '%s %-20s %6s  %s\n' "$([[ "$b" == "$current" ]] && echo '*' || echo ' ')" "$b" \
+            "$(du -h "$f" | cut -f1)" "$f"
+    done
+}
+
+cmd_use() {
+    local build="${1:-}"
+    [[ -n "$build" ]] || die "Which build? See 'freecad-james-update list'"
+    [[ -f "$(appimage_of "$build")" ]] || die "$build is not installed, see 'freecad-james-update list'"
+    make_current "$build"
+}
+
+cmd_remove() {
+    local build="${1:-}"
+    [[ -n "$build" ]] || die "Which build? See 'freecad-james-update list'"
+    [[ "$build" == "$(current_build)" ]] && die "$build is the current one, switch with 'use' first"
+    rm -f "$(appimage_of "$build")" "$(appimage_of "$build").stamp"
+    [[ "$build" == *-local ]] && remove_source "${build%-local}"
+    log "Removed $build"
+}
+
+cmd_desktop() {
+    local build
+    build="$(current_build)"
+    [[ -n "$build" ]] || die "Nothing is installed, run freecad-james-update"
+    install_desktop "$build"
+    log "Installed the launcher, menu entry and icon"
+}
+
+cmd_timer() {
+    case "${1:-}" in
+        on)
+            mkdir -p "$SYSTEMD_DIR"
+            cat >"$SYSTEMD_DIR/freecad-james-check.service" <<EOF
+[Unit]
+Description=Check for new builds of $APP_NAME
+
+[Service]
+Type=oneshot
+ExecStart=$SELF check --notify
+SuccessExitStatus=10
+EOF
+            cat >"$SYSTEMD_DIR/freecad-james-check.timer" <<EOF
+[Unit]
+Description=Weekly check for new builds of $APP_NAME
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
+EOF
+            host_run systemctl --user daemon-reload
+            host_run systemctl --user enable --now freecad-james-check.timer
+            log "Checking weekly for new builds"
+            ;;
+        off)
+            host_run systemctl --user disable --now freecad-james-check.timer || true
+            rm -f "$SYSTEMD_DIR/freecad-james-check.service" "$SYSTEMD_DIR/freecad-james-check.timer"
+            host_run systemctl --user daemon-reload || true
+            log "Stopped checking for new builds"
+            ;;
+        *) die "Use: timer on|off" ;;
+    esac
+}
+
+cmd_default_app() {
+    host_run xdg-mime default "$APP_ID.desktop" application/x-extension-fcstd
+    log ".FCStd files now open with $APP_NAME"
+}
+
+command="${1:-update}"
+case "$command" in
+    -h | --help | help) usage ;;
+    update | --*)
+        if [[ "$command" == update && $# -gt 0 ]]; then shift; fi
+        self_update update "$@"
+        cmd_update "$@"
+        ;;
+    check) shift; cmd_check "$@" ;;
+    list) cmd_list ;;
+    use) shift; cmd_use "$@" ;;
+    remove) shift; cmd_remove "$@" ;;
+    desktop) cmd_desktop ;;
+    timer) shift; cmd_timer "$@" ;;
+    default-app) cmd_default_app ;;
+    build)
+        shift
+        self_update build "$@"
+        cmd_build "$@"
+        ;;
+    publish) shift; cmd_publish "$@" ;;
+    ci) shift; cmd_ci "$@" ;;
+    *) die "Unknown command $command, see --help" ;;
+esac

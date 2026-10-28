@@ -1,0 +1,143 @@
+# Builds FreeCAD (James Edition) for new FreeCAD releases and for new feature
+# commits, and publishes the builds as GitHub releases.
+#
+# Daily, the newest FreeCAD release (and the newest release candidate, if it
+# is newer) is compared with the releases here. When there is no build of it
+# with the current feature commits, it is built for Linux (AppImage) and
+# Windows (portable .7z), tested and published. The build follows FreeCAD's own
+# release workflow, .github/workflows/build_release.yml of FreeCAD.
+
+name: Release
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "FreeCAD release tag to build, e.g. 26.3 (empty: the newest releases)"
+        required: false
+        default: ""
+      rebuild:
+        description: "Build even if there is a release with the same feature commits"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      builds: ${{ steps.plan.outputs.builds }}
+    steps:
+      - name: Checkout the tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Find releases to build
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: packaging/ci.sh plan >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.builds != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJSON(needs.plan.outputs.builds) }}
+        platform: [linux, windows]
+    name: ${{ matrix.build.tag }} ${{ matrix.platform }}
+    runs-on: ${{ matrix.platform == 'windows' && 'windows-2022' || 'ubuntu-22.04' }}
+    # A release is published without the Windows build if that fails
+    continue-on-error: ${{ matrix.platform == 'windows' }}
+    timeout-minutes: 340
+    steps:
+      # The environment, build and AppImage need more room than the runner has
+      - name: Free disk space
+        if: runner.os == 'Linux'
+        uses: AdityaGarg8/remove-unwanted-software@90e01b21170618765a73370fcc3abbd1684a7793 # v5
+        with:
+          remove-android: "true"
+          remove-cached-tools: "true"
+
+      - name: Install the test display
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q xvfb libgl1-mesa-dri
+
+      - name: Use drive D for packages
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo 'PIXI_CACHE_DIR=D:\rattler' >>"$GITHUB_ENV"
+          echo 'RATTLER_CACHE_DIR=D:\rattler' >>"$GITHUB_ENV"
+
+      - name: Checkout the tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tooling
+
+      - name: Get FreeCAD ${{ matrix.build.version }} with the feature
+        id: source
+        shell: bash
+        run: >-
+          tooling/packaging/ci.sh source "${{ matrix.build.version }}" "${{ matrix.build.ref }}"
+          "${{ matrix.build.sha }}" src >>"$GITHUB_OUTPUT"
+
+      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+        with:
+          pixi-version: ${{ steps.source.outputs.pixi_version }}
+          run-install: false
+          cache: false
+
+      - name: Build
+        shell: bash
+        run: tooling/packaging/ci.sh build src
+
+      - name: Package and test
+        shell: bash
+        run: >-
+          tooling/packaging/ci.sh package src "${{ matrix.build.tag }}" "${{ matrix.build.version }}" dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.build.tag }}-${{ matrix.platform }}
+          path: dist/*
+          retention-days: 3
+          compression-level: 0
+
+  publish:
+    needs: [plan, build]
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.builds != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        build: ${{ fromJSON(needs.plan.outputs.builds) }}
+    name: publish ${{ matrix.build.tag }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ matrix.build.tag }}-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          packaging/ci.sh publish "${{ matrix.build.tag }}" "${{ matrix.build.version }}"
+          "${{ matrix.build.prerelease }}" "${{ matrix.build.sha }}" "${{ matrix.build.ref }}" dist
