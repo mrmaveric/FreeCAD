@@ -217,12 +217,6 @@ class TestSectionViewGui(unittest.TestCase):
         Gui.getDocument(self.doc.Name).setEdit(section.Name)
         try:
             process_events()
-            self.view.viewIsometric()
-            self.view.fitAll()
-            for _ in range(3):
-                Gui.runCommand("Std_ViewZoomOut")
-            process_events()
-
             scene = self.view.getViewer().getSoRenderManager().getSceneGraph()
             arrows = self.find_paths(scene, "SoLinearDraggerContainer")
             arcs = self.find_paths(scene, "SoRotationDraggerContainer")
@@ -231,8 +225,19 @@ class TestSectionViewGui(unittest.TestCase):
             arrow = arrows[0].getTail()
             self.assertLess(self.arrow_error(section, arrow), 0.5)
 
-            start, direction = self.screen_position(scene, arcs[0].getTail())
-            if start is None:
+            # The window and the gizmos settle in the event loop, which can take a
+            # while when FreeCAD has just started
+            for _ in range(10):
+                self.view.viewIsometric()
+                self.view.fitAll()
+                for _ in range(3):
+                    Gui.runCommand("Std_ViewZoomOut")
+                process_events()
+                start, direction = self.screen_position(scene, arcs[0].getTail())
+                if start is not None:
+                    break
+                QtCore.QThread.msleep(200)
+            else:
                 self.skipTest("the tilt gizmo is not on the screen")
             angle = section.Plane1AngleX.Value
             self.drag(start, direction, 72)
@@ -279,7 +284,10 @@ class TestSectionViewGui(unittest.TestCase):
         (x0, y0), (x1, y1) = hits[0], hits[-1]
         length = math.hypot(x1 - x0, y1 - y0)
         x, y = hits[len(hits) // 2]
-        return QtCore.QPoint(x, y), ((x1 - x0) / length, (y1 - y0) / length)
+        # The viewport is in device pixels, mouse events are in the widget's pixels
+        ratio = self.view.graphicsView().viewport().devicePixelRatioF()
+        position = QtCore.QPoint(round(x / ratio), round(y / ratio))
+        return position, ((x1 - x0) / length, (y1 - y0) / length)
 
     def drag(self, start, direction, distance):
         widget = self.view.graphicsView().viewport()
