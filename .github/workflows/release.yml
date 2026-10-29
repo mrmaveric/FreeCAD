@@ -45,7 +45,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
           REBUILD: ${{ inputs.rebuild }}
-        run: packaging/ci.sh plan >>"$GITHUB_OUTPUT"
+        run: packaging/ci.sh plan
 
   build:
     needs: plan
@@ -90,7 +90,7 @@ jobs:
         shell: bash
         run: >-
           tooling/packaging/ci.sh source "${{ matrix.build.version }}" "${{ matrix.build.ref }}"
-          "${{ matrix.build.sha }}" src >>"$GITHUB_OUTPUT"
+          "${{ matrix.build.sha }}" src
 
       - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
         with:

@@ -3,7 +3,8 @@
 #
 #   ci.sh plan                         Which releases to build, as JSON for the
 #                                      build matrix (env VERSION, REBUILD)
-#   ci.sh source VERSION REF SHA DIR   FreeCAD VERSION with the feature, in DIR
+#   ci.sh source VERSION REF SHA DIR   FreeCAD VERSION with the feature, in DIR,
+#                                      and the pixi version to build it with
 #   ci.sh build DIR                    Build and install it
 #   ci.sh package DIR TAG VERSION OUT  Package and test it for this platform
 #   ci.sh publish TAG VERSION PRERELEASE SHA REF DIST
@@ -13,6 +14,9 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/james.sh"
 
 summary() { [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && cat >>"$GITHUB_STEP_SUMMARY" || cat >&2; }
+
+# A step output; stdout is the log
+output() { echo "$1" >>"${GITHUB_OUTPUT:-/dev/stdout}"; }
 
 is_windows() { [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; }
 
@@ -67,7 +71,7 @@ cmd_plan() {
             '. + [{version: $v, tag: $t, ref: $r, sha: $s, prerelease: $p}]' <<<"$builds")"
         echo "FreeCAD $v: building $tag from $ref ($sha)" | summary
     done
-    echo "builds=$builds"
+    output "builds=$builds"
 }
 
 cmd_source() {
@@ -119,7 +123,7 @@ EOF
     local pixi
     pixi="$(grep -oE 'pixi-version: *v[0-9.]+' "$dir/.github/workflows/build_release.yml" 2>/dev/null \
         | head -n 1 | sed 's/.*: *//' || true)"
-    echo "pixi_version=${pixi:-latest}"
+    output "pixi_version=${pixi:-latest}"
 }
 
 cmd_build() {
@@ -147,9 +151,15 @@ cmd_package() {
          && tar -A -f \"$tarball\" \"\$toplevel/.sub.tar\" && rm \"\$toplevel/.sub.tar\""
     gzip -9 "$tarball"
 
-    # For the release notes
-    git -C "$src" log --reverse --format='- [`%h`](https://github.com/'"$GITHUB_REPO"'/commit/%H) %s' \
-        "refs/tags/$version..HEAD" >"$out/feature-commits.md"
+    # For the release notes, the commits as they are on GitHub: those of a
+    # james/VERSION branch, or the feature commits (their cherry-picks only
+    # exist in this build)
+    local range="refs/tags/$version..HEAD"
+    if ! git -C "$src" merge-base --is-ancestor HEAD refs/remotes/patch/feature; then
+        range="$(git -C "$src" merge-base refs/remotes/origin/main refs/remotes/patch/feature)..refs/remotes/patch/feature"
+    fi
+    git -C "$src" log --reverse --no-merges \
+        --format='- [`%h`](https://github.com/'"$GITHUB_REPO"'/commit/%H) %s' "$range" >"$out/feature-commits.md"
 }
 
 cmd_publish() {
