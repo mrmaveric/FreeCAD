@@ -1,4 +1,4 @@
-# Temporary: why moc.exe cannot find its DLLs in the Windows build
+# Temporary: which change makes the moc.exe test run fail in the Windows build
 name: Debug Windows
 
 on:
@@ -38,21 +38,19 @@ jobs:
         working-directory: src
         run: pixi install --frozen
 
-      - name: Compare
+      - name: Configure variants
         shell: bash
         working-directory: src
         run: |
           d="$(cygpath -m "$GITHUB_WORKSPACE")/tooling/.github/debug"
-          echo "== python, string form, --frozen"; pixi run --frozen "python $d/diag.py" || true
-          echo "== bash, string form, --frozen"; pixi run --frozen "bash $d/diag.sh" || true
-          echo "== bash, string form, --locked"; pixi run --locked "bash $d/diag.sh" || true
-          echo "== bash, args form"; pixi run --frozen bash "$d/diag.sh" || true
-
-      - name: Short path
-        shell: bash
-        run: |
-          tooling/packaging/ci.sh source 26.3rc2 feature/section-view 9613ba2159 /d/s
-          cd /d/s && pixi install --frozen
-          d="$(cygpath -m "$GITHUB_WORKSPACE")/tooling/.github/debug"
-          echo "== D:\\s, python, string form"; pixi run --frozen "python $d/diag.py" || true
-          echo "== D:\\s, bash, string form"; pixi run --frozen "bash $d/diag.sh" || true
+          echo "== like FreeCAD (developer tests on)"
+          pixi run --frozen "bash $d/configure.sh tests-on" || true
+          echo "== developer tests off"
+          cat >tests-off.sh <<'EOS'
+          CMAKE_ARGS="${CMAKE_ARGS:-} -DENABLE_DEVELOPER_TESTS=OFF" exec bash "$1" tests-off
+          EOS
+          pixi run --frozen "bash tests-off.sh $d/configure.sh" || true
+          echo "== developer tests off, ccache settings"
+          sed -i 's/tests-off$/tests-off-ccache/' tests-off.sh
+          CCACHE_BASEDIR="$PWD" CCACHE_NOHASHDIR=1 CMAKE_BUILD_PARALLEL_LEVEL=4 \
+            pixi run --frozen "bash tests-off.sh $d/configure.sh" || true
