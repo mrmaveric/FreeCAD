@@ -8,56 +8,14 @@ permissions:
   contents: read
 
 jobs:
-  debug:
-    runs-on: windows-2022
-    timeout-minutes: 340
-    steps:
-      - name: Use drive D for packages
-        shell: bash
-        run: |
-          echo 'PIXI_CACHE_DIR=D:\rattler' >>"$GITHUB_ENV"
-          echo 'RATTLER_CACHE_DIR=D:\rattler' >>"$GITHUB_ENV"
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          path: tooling
-
-      - name: Source
-        id: source
-        shell: bash
-        run: tooling/packaging/ci.sh source 26.3rc2 feature/section-view 9613ba2159 src
-
-      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
-        with:
-          pixi-version: ${{ steps.source.outputs.pixi_version }}
-          run-install: false
-          cache: false
-
-      - name: Environment
-        shell: bash
-        working-directory: src
-        run: |
-          git submodule update --init --recursive --quiet
-          pixi install --frozen
-
-      - name: Configure variants
-        shell: bash
-        working-directory: src
-        run: |
-          d="$(cygpath -m "$GITHUB_WORKSPACE")/tooling/.github/debug"
-          envcmake="$(cygpath -m "$PWD")/.pixi/envs/default/Library/bin/cmake.exe"
-          echo "== like FreeCAD, cmake from PATH"
-          pixi run --frozen "bash $d/configure.sh path" || true
-          echo "== like FreeCAD, cmake of the environment"
-          pixi run --frozen "bash $d/configure.sh env $envcmake" || true
-
   replica:
     strategy:
       fail-fast: false
       matrix:
-        place: [".", "src"]
-    name: replica in ${{ matrix.place }}
-    runs-on: windows-2022
+        place: ["src"]
+        image: [windows-2025]
+    name: replica on ${{ matrix.image }}
+    runs-on: ${{ matrix.image }}
     steps:
       - name: Use drive D for packages
         shell: bash
