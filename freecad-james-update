@@ -417,9 +417,17 @@ if [[ ! -e "\$APPIMAGE" ]]; then
     echo "No $APP_NAME is installed, run freecad-james-update." >&2
     exit 1
 fi
-# Without FUSE, e.g. in some containers, unpack on the fly
+# Without FUSE, e.g. in some containers, the AppImage unpacks itself (3 GB)
+# for every start and leaves the copy behind, so it gets a folder of its own
+# that is removed when FreeCAD ends
 if [[ ! -e /dev/fuse ]] || { ! command -v fusermount3 && ! command -v fusermount; } >/dev/null; then
-    export APPIMAGE_EXTRACT_AND_RUN=1
+    cache="\${XDG_CACHE_HOME:-\$HOME/.cache}/freecad-james"
+    mkdir -p "\$cache"
+    unpacked="\$(mktemp -d "\$cache/run.XXXXXX")"
+    TMPDIR="\$unpacked" APPIMAGE_EXTRACT_AND_RUN=1 "\$APPIMAGE" "\$@"
+    status=\$?
+    rm -rf "\$unpacked"
+    exit "\$status"
 fi
 exec "\$APPIMAGE" "\$@"
 EOF
