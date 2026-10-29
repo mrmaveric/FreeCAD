@@ -34,7 +34,10 @@ Later, `freecad-james-update` installs a newer build when there is one:
 | `freecad-james-update --help` | All commands and options |
 
 Builds of release candidates are only installed with `--pre`, or while there
-is no build of a final release.
+is no build of a final release. The newest build is the one of the newest
+FreeCAD release that was made last, whether it was published or built on this
+computer (see [Changing the feature](#changing-the-feature)). So a local test
+build stays current until a build is published after it.
 
 ## Install on Windows
 

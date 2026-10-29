@@ -53,8 +53,9 @@ Usage: freecad-james-update [COMMAND] [OPTIONS]
 Installing the builds published on GitHub:
   update [BUILD]     Install the newest build, or BUILD (e.g. 26.3-james.1, or
                      26.3 for its newest build), and make it current. The
-                     default command. Never goes back to an older FreeCAD
-                     release unless BUILD is given.
+                     default command. The newest build is the one of the
+                     newest FreeCAD release that was made last, published or
+                     built here, so it never goes back to an older one.
       --pre          Include builds of release candidates. They are also used
                      while there is no build of a final release.
       --no-switch    Download only, don't make it the current one.
@@ -124,6 +125,25 @@ current_build() {
     [[ -L "$CURRENT" && -e "$CURRENT" ]] && build_of_appimage "$(readlink -f "$CURRENT")" || true
 }
 
+# Whether a plain update replaces the current build $3 with the published
+# build $1, published at $2 (seconds since 1970). The newest FreeCAD release
+# wins, and of the builds of one release the one made last, also when it was
+# built on this computer.
+replaces() {
+    local build="$1" published="$2" current="$3" release current_release
+    [[ -n "$current" ]] || return 0
+    release="$(freecad_version_of "$build")"
+    current_release="$(freecad_version_of "$current")"
+    if [[ "$release" != "$current_release" ]]; then
+        version_gt "$release" "$current_release"
+    elif [[ "$current" == *-james.* ]]; then
+        version_gt "$build" "$current"
+    else
+        # Built on this computer when its AppImage was made
+        ((published > $(stat -c %Y "$(appimage_of "$current")")))
+    fi
+}
+
 # Gets the newest tooling, and runs it if it changed
 self_update() {
     [[ -d "$TOOLING/.git" && -z "${JAMES_NO_SELF_UPDATE:-}" ]] || return 0
@@ -142,12 +162,14 @@ self_update() {
 # ---------------------------------------------------------------------------
 # Published builds
 
-# Lines "BUILD PRERELEASE APPIMAGE_URL SUMS_URL" of the builds on GitHub
+# Lines "BUILD PRERELEASE PUBLISHED APPIMAGE_URL SUMS_URL" of the builds on
+# GitHub, PUBLISHED in seconds since 1970
 github_builds() {
     curl -fsSL -H "Accept: application/vnd.github+json" \
         "https://api.github.com/repos/$GITHUB_REPO/releases?per_page=100" \
         | python3 -c '
 import json, sys
+from datetime import datetime
 suffix = sys.argv[1]
 for release in json.load(sys.stdin):
     if release["draft"]:
@@ -155,30 +177,32 @@ for release in json.load(sys.stdin):
     assets = {a["name"]: a["browser_download_url"] for a in release["assets"]}
     appimages = [url for name, url in assets.items() if name.endswith(suffix)]
     if appimages:
-        print(release["tag_name"], str(release["prerelease"]).lower(), appimages[0],
+        when = release.get("published_at") or release["created_at"]
+        published = int(datetime.fromisoformat(when.replace("Z", "+00:00")).timestamp())
+        print(release["tag_name"], str(release["prerelease"]).lower(), published, appimages[0],
               assets.get("SHA256SUMS", "-"))
 ' "-$ARCH.AppImage"
 }
 
 # Chooses a build from github_builds: the newest one, or the newest one of
 # $2 (a build or a FreeCAD version). Release candidates only with $1 = 1, or
-# when there is no build of a final release.
+# when there is no build of a final release. Prints "BUILD URL SUMS PUBLISHED".
 choose_build() {
-    local pre="$1" want="${2:-}" lines best="" best_pre="" build prerelease url sums
+    local pre="$1" want="${2:-}" lines best="" best_pre="" build prerelease published url sums
     lines="$(github_builds)" || die "Couldn't get the builds from GitHub"
-    while read -r build prerelease url sums; do
+    while read -r build prerelease published url sums; do
         [[ -n "$build" ]] || continue
         if [[ -n "$want" && "$build" != "$want" && "$build" != "$want-james."* ]]; then
             continue
         fi
         if [[ "$prerelease" == "true" && "$pre" != 1 && -z "$want" ]]; then
             if [[ -z "$best_pre" ]] || version_gt "$build" "${best_pre%% *}"; then
-                best_pre="$build $url $sums"
+                best_pre="$build $url $sums $published"
             fi
             continue
         fi
         if [[ -z "$best" ]] || version_gt "$build" "${best%% *}"; then
-            best="$build $url $sums"
+            best="$build $url $sums $published"
         fi
     done <<<"$lines"
     if [[ -z "$best" && -n "$best_pre" ]]; then
@@ -218,18 +242,17 @@ cmd_update() {
     done
     need curl python3 sha256sum
 
-    local chosen build url sums current
+    local chosen build url sums published current
     chosen="$(choose_build "$pre" "$want")"
     [[ -n "$chosen" ]] || die "No build${want:+ of $want} found on https://github.com/$GITHUB_REPO/releases"
-    read -r build url sums <<<"$chosen"
+    read -r build url sums published <<<"$chosen"
     current="$(current_build)"
 
     if [[ "$build" == "$current" ]]; then
         log "$APP_NAME $build is installed and current"
         return 0
     fi
-    if [[ -z "$want" && -n "$current" ]] \
-        && version_gt "$(freecad_version_of "$current")" "$(freecad_version_of "$build")"; then
+    if [[ -z "$want" ]] && ! replaces "$build" "$published" "$current"; then
         log "The current build $current is newer than the newest published build $build"
         return 0
     fi
@@ -241,19 +264,19 @@ cmd_update() {
 }
 
 cmd_check() {
-    local notify=0 chosen build current
+    local notify=0 chosen build published current
     [[ "${1:-}" == "--notify" ]] && notify=1
     need curl python3
     current="$(current_build)"
     # Release candidates count when one is installed
     chosen="$(choose_build "$([[ "$current" == *rc* ]] && echo 1 || echo 0)" 2>/dev/null)"
-    build="${chosen%% *}"
+    read -r build _ _ published <<<"$chosen"
     if [[ -z "$build" ]]; then
         echo "There are no builds on https://github.com/$GITHUB_REPO/releases"
         return 0
     elif [[ -z "$current" ]]; then
         echo "Nothing is installed, the newest build is $build"
-    elif [[ "$build" == "$current" ]] || ! version_gt "$build" "$current"; then
+    elif [[ "$build" == "$current" ]] || ! replaces "$build" "$published" "$current"; then
         echo "$current is up to date"
         return 0
     else
