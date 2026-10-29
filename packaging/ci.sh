@@ -18,8 +18,6 @@ summary() { [[ -n "${GITHUB_STEP_SUMMARY:-}" ]] && cat >>"$GITHUB_STEP_SUMMARY" 
 # A step output; stdout is the log
 output() { echo "$1" >>"${GITHUB_OUTPUT:-/dev/stdout}"; }
 
-is_windows() { [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; }
-
 # The newest stable release and the newest release candidate, if it is newer.
 # A release with a James Edition build of the same feature commits is
 # skipped, unless REBUILD is true.

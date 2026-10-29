@@ -37,6 +37,8 @@ die() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 # Sorts versions and build names, release candidates before their release
 sort_versions() { sed -E 's/rc([0-9]+)/~rc\1/' | sort -V | sed 's/~rc/rc/'; }
 
+is_windows() { [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; }
+
 # Whether version $1 is newer than $2
 version_gt() {
     [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort_versions | tail -n 1)" == "$1" ]]
@@ -104,6 +106,7 @@ build_source() {
         cd "$1" || exit 1
         git submodule update --init --recursive || exit 1
         "$PIXI" install --frozen || exit 1
+        is_windows && { _qt_tool_dlls add || exit 1; }
         export CCACHE_BASEDIR="$PWD" CCACHE_NOHASHDIR=1
         export CMAKE_BUILD_PARALLEL_LEVEL="${JOBS:-$(nproc)}"
         # Without FreeCAD's developer tests. CMAKE_ARGS is set by the
@@ -111,10 +114,38 @@ build_source() {
         cat >.james-build.sh <<'EOF'
 CMAKE_ARGS="${CMAKE_ARGS:-} -DENABLE_DEVELOPER_TESTS=OFF" exec bash package/bundle/build.sh
 EOF
-        # One command string, like FreeCAD's workflow: on Windows, pixi only
-        # puts all directories of the environment on PATH for those
-        "$PIXI" run --frozen "bash .james-build.sh"
+        local status=0
+        "$PIXI" run --frozen "bash .james-build.sh" || status=$?
+        is_windows && _qt_tool_dlls remove
+        exit "$status"
     )
+}
+
+# On Windows, the Qt tools of FreeCAD 26.3 (moc, rcc and uic, in
+# Library/lib/qt6 of the environment) don't find their DLLs when CMake runs
+# them on the GitHub runners since October 2026 (exit code 0xc0000135), not
+# even in FreeCAD's own workflow. Copies of the DLLs next to them are found.
+# "add" makes the copies in the source tree's environment, "remove" deletes
+# them again, so they don't end up in the package.
+_qt_tool_dlls() {
+    local qt=".pixi/envs/default/Library/lib/qt6" list=".james-qt-dlls" dll
+    case "$1" in
+        add)
+            : >"$list"
+            for dll in .pixi/envs/default/Library/bin/*.dll; do
+                [[ -e "$qt/${dll##*/}" ]] && continue
+                cp "$dll" "$qt/" || return 1
+                echo "${dll##*/}" >>"$list"
+            done
+            ;;
+        remove)
+            [[ -f "$list" ]] || return 0
+            while read -r dll; do
+                rm -f "$qt/$dll"
+            done <"$list"
+            rm -f "$list"
+            ;;
+    esac
 }
 
 # ---------------------------------------------------------------------------
