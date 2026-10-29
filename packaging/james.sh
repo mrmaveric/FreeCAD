@@ -121,27 +121,29 @@ EOF
     )
 }
 
-# On Windows, the Qt tools of FreeCAD 26.3 (moc, rcc and uic, in
-# Library/lib/qt6 of the environment) don't find their DLLs when CMake runs
-# them on the GitHub runners since October 2026 (exit code 0xc0000135), not
-# even in FreeCAD's own workflow. Copies of the DLLs next to them are found.
-# "add" makes the copies in the source tree's environment, "remove" deletes
-# them again, so they don't end up in the package.
+# On Windows, the Qt tools of FreeCAD 26.3 (moc, rcc, uic, lrelease, ... in
+# Library/lib/qt6 of the environment) don't find their DLLs when the build
+# runs them on the GitHub runners since October 2026 (exit code 0xc0000135),
+# not even in FreeCAD's own workflow. Copies of the DLLs next to them are
+# found. "add" makes the copies in the source tree's environment, "remove"
+# deletes them again, so they don't end up in the package.
 _qt_tool_dlls() {
-    local qt=".pixi/envs/default/Library/lib/qt6" list=".james-qt-dlls" dll
+    local qt=".pixi/envs/default/Library/lib/qt6" list=".james-qt-dlls" dir dll
     case "$1" in
         add)
             : >"$list"
-            for dll in .pixi/envs/default/Library/bin/*.dll; do
-                [[ -e "$qt/${dll##*/}" ]] && continue
-                cp "$dll" "$qt/" || return 1
-                echo "${dll##*/}" >>"$list"
-            done
+            while read -r dir; do
+                for dll in .pixi/envs/default/Library/bin/*.dll; do
+                    [[ -e "$dir/${dll##*/}" ]] && continue
+                    cp "$dll" "$dir/" || return 1
+                    echo "$dir/${dll##*/}" >>"$list"
+                done
+            done < <(find "$qt" -name '*.exe' -printf '%h\n' | sort -u)
             ;;
         remove)
             [[ -f "$list" ]] || return 0
             while read -r dll; do
-                rm -f "$qt/$dll"
+                rm -f "$dll"
             done <"$list"
             rm -f "$list"
             ;;
