@@ -334,9 +334,20 @@ _test_build() {
 }
 
 test_appimage() {
+    # The AppImage unpacks itself (3 GB) into TMPDIR for every run and leaves
+    # it there, so the tests use a temporary folder of their own, which is
+    # removed afterwards. /tmp is often small.
+    local tmp status=0
+    mkdir -p "$JAMES_CACHE"
+    tmp="$(mktemp -d "$JAMES_CACHE/test.XXXXXX")" || return 1
     local -a app=(env APPIMAGE_EXTRACT_AND_RUN=1 "$1" freecadcmd)
     local -a gui=(env APPIMAGE_EXTRACT_AND_RUN=1 "$1")
-    _test_build app gui
+    (
+        export TMPDIR="$tmp"
+        _test_build app gui
+    ) || status=1
+    rm -rf "$tmp"
+    return "$status"
 }
 
 test_windows() {
