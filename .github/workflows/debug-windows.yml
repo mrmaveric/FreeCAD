@@ -1,4 +1,4 @@
-# Temporary: the Windows build of release.yml on its own, to test fixes
+# Temporary: why moc.exe cannot find its DLLs in the Windows build
 name: Debug Windows
 
 on:
@@ -33,17 +33,26 @@ jobs:
           run-install: false
           cache: false
 
-      - name: Build
+      - name: Environment
         shell: bash
-        run: tooling/packaging/ci.sh build src
+        working-directory: src
+        run: pixi install --frozen
 
-      - name: Package and test
+      - name: Compare
         shell: bash
-        run: tooling/packaging/ci.sh package src 26.3rc2-james.test 26.3rc2 dist
+        working-directory: src
+        run: |
+          d="$(cygpath -m "$GITHUB_WORKSPACE")/tooling/.github/debug"
+          echo "== python, string form, --frozen"; pixi run --frozen "python $d/diag.py" || true
+          echo "== bash, string form, --frozen"; pixi run --frozen "bash $d/diag.sh" || true
+          echo "== bash, string form, --locked"; pixi run --locked "bash $d/diag.sh" || true
+          echo "== bash, args form"; pixi run --frozen bash "$d/diag.sh" || true
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: windows-test
-          path: dist/*
-          retention-days: 2
-          compression-level: 0
+      - name: Short path
+        shell: bash
+        run: |
+          tooling/packaging/ci.sh source 26.3rc2 feature/section-view 9613ba2159 /d/s
+          cd /d/s && pixi install --frozen
+          d="$(cygpath -m "$GITHUB_WORKSPACE")/tooling/.github/debug"
+          echo "== D:\\s, python, string form"; pixi run --frozen "python $d/diag.py" || true
+          echo "== D:\\s, bash, string form"; pixi run --frozen "bash $d/diag.sh" || true
