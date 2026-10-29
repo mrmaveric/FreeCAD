@@ -1,0 +1,58 @@
+# Temporary: why moc.exe can't find its DLLs in the Windows build
+name: Debug Windows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: windows-2022
+    steps:
+      - name: Use drive D for packages
+        shell: bash
+        run: |
+          echo 'PIXI_CACHE_DIR=D:\rattler' >>"$GITHUB_ENV"
+          echo 'RATTLER_CACHE_DIR=D:\rattler' >>"$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tooling
+
+      - name: Source
+        id: source
+        shell: bash
+        run: tooling/packaging/ci.sh source 26.3rc2 feature/section-view 9613ba2159 src
+
+      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+        with:
+          pixi-version: ${{ steps.source.outputs.pixi_version }}
+          run-install: false
+          cache: false
+
+      - name: Environment
+        shell: bash
+        working-directory: src
+        run: pixi install --frozen
+
+      - name: Compare
+        shell: bash
+        working-directory: src
+        run: |
+          moc=.pixi/envs/default/Library/lib/qt6/moc.exe
+          echo "== args form: PATH"
+          pixi run --frozen bash -c 'echo "$PATH" | tr ":" "\n" | head -12; command -v bash cmake cl'
+          echo "== string form: PATH"
+          pixi run --frozen "bash -c 'echo \$PATH | tr : \"\\n\" | head -12; command -v bash cmake cl'"
+          echo "== args form: moc"
+          pixi run --frozen bash -c "$moc -v; echo rc=\$?" || true
+          echo "== string form: moc"
+          pixi run --frozen "bash -c '$moc -v; echo rc=\$?'" || true
+          echo "== direct, no pixi"
+          "$moc" -v; echo "rc=$?"
+          echo "== CMAKE_ARGS"
+          pixi run --frozen bash -c 'echo "CMAKE_ARGS=$CMAKE_ARGS"'
+          echo "== Path variables"
+          pixi run --frozen bash -c 'env | grep -i "^path=" | cut -c1-300'
