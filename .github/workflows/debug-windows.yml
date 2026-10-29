@@ -50,3 +50,47 @@ jobs:
           pixi run --frozen "bash $d/configure.sh path" || true
           echo "== like FreeCAD, cmake of the environment"
           pixi run --frozen "bash $d/configure.sh env $envcmake" || true
+
+  replica:
+    strategy:
+      fail-fast: false
+      matrix:
+        place: [".", "src"]
+    name: replica in ${{ matrix.place }}
+    runs-on: windows-2022
+    steps:
+      - name: Use drive D for packages
+        shell: bash
+        run: |
+          echo 'PIXI_CACHE_DIR=D:\rattler' >>"$GITHUB_ENV"
+          echo 'RATTLER_CACHE_DIR=D:\rattler' >>"$GITHUB_ENV"
+
+      - name: Checkout FreeCAD 26.3rc2 as FreeCAD's workflow does
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: FreeCAD/FreeCAD
+          ref: 26.3rc2
+          path: ${{ matrix.place }}
+          fetch-depth: 2
+          fetch-tags: true
+          submodules: recursive
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tooling
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: v0.81.0
+          cache: false
+          locked: true
+          manifest-path: ${{ matrix.place }}/pixi.toml
+
+      - name: Configure as FreeCAD's workflow does
+        shell: bash
+        working-directory: ${{ matrix.place }}
+        run: |
+          python3 package/scripts/write_version_info.py ../freecad_version.txt
+          d="$(cygpath -m "$GITHUB_WORKSPACE")/tooling/.github/debug"
+          pixi run --locked "bash $d/configure.sh replica" || true
+
