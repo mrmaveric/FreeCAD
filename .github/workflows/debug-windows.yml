@@ -43,14 +43,8 @@ jobs:
         working-directory: src
         run: |
           d="$(cygpath -m "$GITHUB_WORKSPACE")/tooling/.github/debug"
-          echo "== like FreeCAD (developer tests on)"
-          pixi run --frozen "bash $d/configure.sh tests-on" || true
-          echo "== developer tests off"
-          cat >tests-off.sh <<'EOS'
-          CMAKE_ARGS="${CMAKE_ARGS:-} -DENABLE_DEVELOPER_TESTS=OFF" exec bash "$1" tests-off
-          EOS
-          pixi run --frozen "bash tests-off.sh $d/configure.sh" || true
-          echo "== developer tests off, ccache settings"
-          sed -i 's/tests-off$/tests-off-ccache/' tests-off.sh
-          CCACHE_BASEDIR="$PWD" CCACHE_NOHASHDIR=1 CMAKE_BUILD_PARALLEL_LEVEL=4 \
-            pixi run --frozen "bash tests-off.sh $d/configure.sh" || true
+          envcmake="$(cygpath -m "$PWD")/.pixi/envs/default/Library/bin/cmake.exe"
+          echo "== like FreeCAD, cmake from PATH"
+          pixi run --frozen "bash $d/configure.sh path" || true
+          echo "== like FreeCAD, cmake of the environment"
+          pixi run --frozen "bash $d/configure.sh env $envcmake" || true
