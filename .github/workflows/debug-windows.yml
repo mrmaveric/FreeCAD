@@ -36,7 +36,9 @@ jobs:
       - name: Environment
         shell: bash
         working-directory: src
-        run: pixi install --frozen
+        run: |
+          git submodule update --init --recursive --quiet
+          pixi install --frozen
 
       - name: Configure variants
         shell: bash
