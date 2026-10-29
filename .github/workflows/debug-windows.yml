@@ -1,4 +1,4 @@
-# Temporary: why moc.exe can't find its DLLs in the Windows build
+# Temporary: the Windows build of release.yml on its own, to test fixes
 name: Debug Windows
 
 on:
@@ -10,6 +10,7 @@ permissions:
 jobs:
   debug:
     runs-on: windows-2022
+    timeout-minutes: 340
     steps:
       - name: Use drive D for packages
         shell: bash
@@ -32,27 +33,17 @@ jobs:
           run-install: false
           cache: false
 
-      - name: Environment
+      - name: Build
         shell: bash
-        working-directory: src
-        run: pixi install --frozen
+        run: tooling/packaging/ci.sh build src
 
-      - name: Compare
+      - name: Package and test
         shell: bash
-        working-directory: src
-        run: |
-          moc=.pixi/envs/default/Library/lib/qt6/moc.exe
-          echo "== args form: PATH"
-          pixi run --frozen bash -c 'echo "$PATH" | tr ":" "\n" | head -12; command -v bash cmake cl'
-          echo "== string form: PATH"
-          pixi run --frozen "bash -c 'echo \$PATH | tr : \"\\n\" | head -12; command -v bash cmake cl'"
-          echo "== args form: moc"
-          pixi run --frozen bash -c "$moc -v; echo rc=\$?" || true
-          echo "== string form: moc"
-          pixi run --frozen "bash -c '$moc -v; echo rc=\$?'" || true
-          echo "== direct, no pixi"
-          "$moc" -v; echo "rc=$?"
-          echo "== CMAKE_ARGS"
-          pixi run --frozen bash -c 'echo "CMAKE_ARGS=$CMAKE_ARGS"'
-          echo "== Path variables"
-          pixi run --frozen bash -c 'env | grep -i "^path=" | cut -c1-300'
+        run: tooling/packaging/ci.sh package src 26.3rc2-james.test 26.3rc2 dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-test
+          path: dist/*
+          retention-days: 2
+          compression-level: 0

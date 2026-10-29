@@ -106,9 +106,14 @@ build_source() {
         "$PIXI" install --frozen || exit 1
         export CCACHE_BASEDIR="$PWD" CCACHE_NOHASHDIR=1
         export CMAKE_BUILD_PARALLEL_LEVEL="${JOBS:-$(nproc)}"
-        # CMAKE_ARGS is set by the activation of the environment
-        "$PIXI" run --frozen bash -c \
-            'CMAKE_ARGS="${CMAKE_ARGS:-} -DENABLE_DEVELOPER_TESTS=OFF" bash package/bundle/build.sh'
+        # Without FreeCAD's developer tests. CMAKE_ARGS is set by the
+        # activation of the environment.
+        cat >.james-build.sh <<'EOF'
+CMAKE_ARGS="${CMAKE_ARGS:-} -DENABLE_DEVELOPER_TESTS=OFF" exec bash package/bundle/build.sh
+EOF
+        # One command string, like FreeCAD's workflow: on Windows, pixi only
+        # puts all directories of the environment on PATH for those
+        "$PIXI" run --frozen "bash .james-build.sh"
     )
 }
 
