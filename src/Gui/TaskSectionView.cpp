@@ -141,15 +141,21 @@ QString labelOf(const App::SubObjectT& item)
     return names.join(QStringLiteral(" › "));
 }
 
-bool isDragging(Gizmo* gizmo)
+SoDragger* getDragger(Gizmo* gizmo)
 {
     if (auto linear = dynamic_cast<LinearGizmo*>(gizmo)) {
-        return linear->getDraggerContainer()->getDragger()->isActive.getValue();
+        return linear->getDraggerContainer()->getDragger();
     }
     if (auto rotation = dynamic_cast<RotationGizmo*>(gizmo)) {
-        return rotation->getDraggerContainer()->getDragger()->isActive.getValue();
+        return rotation->getDraggerContainer()->getDragger();
     }
-    return false;
+    return nullptr;
+}
+
+bool isDragging(Gizmo* gizmo)
+{
+    auto dragger = getDragger(gizmo);
+    return dragger && dragger->isActive.getValue();
 }
 
 }  // namespace
@@ -1046,6 +1052,23 @@ void TaskSectionView::setupGizmos()
     // Dragging a min face outwards decreases its coordinate
     for (int axis = 0; axis < 3; ++axis) {
         boxGizmos[2 * axis]->setMultFactor(-1.0);
+    }
+
+    // The gizmos aren't moved while one of them is dragged (see setGizmoPositions), so they
+    // are placed again when the drag ends, e.g. the offset arrow along a tilted plane. Later,
+    // so the dragger has finished handling the mouse event.
+    std::vector<Gizmo*> all {offsetGizmo, angleXGizmo, angleYGizmo};
+    all.insert(all.end(), boxGizmos.begin(), boxGizmos.end());
+    for (auto gizmo : all) {
+        if (auto dragger = getDragger(gizmo)) {
+            dragger->addFinishCallback(
+                [](void* data, SoDragger*) {
+                    auto self = static_cast<TaskSectionView*>(data);
+                    QTimer::singleShot(0, self, &TaskSectionView::setGizmoPositions);
+                },
+                this
+            );
+        }
     }
 
     setGizmoPositions();

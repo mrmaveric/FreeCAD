@@ -5,11 +5,12 @@
 Run with FreeCAD -t TestSectionViewGui.
 """
 
+import math
 import unittest
 
 import FreeCAD as App
 import FreeCADGui as Gui
-from PySide import QtCore
+from PySide import QtCore, QtGui, QtWidgets
 
 try:
     from pivy import coin
@@ -209,6 +210,102 @@ class TestSectionViewGui(unittest.TestCase):
         self.doc.undo()
         process_events()
         self.assertEqual(self.clip_planes(self.passes()[0]), 1)
+
+    def test_offset_arrow_follows_tilt_drag(self):
+        """After tilting the plane with its gizmo, the offset arrow points along the new normal"""
+        section = self.add_section()
+        Gui.getDocument(self.doc.Name).setEdit(section.Name)
+        try:
+            process_events()
+            self.view.viewIsometric()
+            self.view.fitAll()
+            for _ in range(3):
+                Gui.runCommand("Std_ViewZoomOut")
+            process_events()
+
+            scene = self.view.getViewer().getSoRenderManager().getSceneGraph()
+            arrows = self.find_paths(scene, "SoLinearDraggerContainer")
+            arcs = self.find_paths(scene, "SoRotationDraggerContainer")
+            if not arrows or not arcs:
+                self.skipTest("gizmos are disabled")
+            arrow = arrows[0].getTail()
+            self.assertLess(self.arrow_error(section, arrow), 0.5)
+
+            start, direction = self.screen_position(scene, arcs[0].getTail())
+            if start is None:
+                self.skipTest("the tilt gizmo is not on the screen")
+            angle = section.Plane1AngleX.Value
+            self.drag(start, direction, 72)
+            if section.Plane1AngleX.Value == angle:
+                self.skipTest("the simulated drag did not reach the tilt gizmo")
+            self.assertLess(self.arrow_error(section, arrow), 0.5)
+        finally:
+            Gui.getDocument(self.doc.Name).resetEdit()
+            process_events()
+
+    @staticmethod
+    def find_paths(node, type_name):
+        search = coin.SoSearchAction()
+        search.setType(coin.SoType.fromName(coin.SbName(type_name)))
+        search.setInterest(coin.SoSearchAction.ALL)
+        search.setSearchingAll(True)
+        search.apply(node)
+        paths = search.getPaths()
+        return [paths[i].copy() for i in range(paths.getLength())]
+
+    @staticmethod
+    def arrow_error(section, arrow):
+        """Angle in degrees between the offset arrow and the plane normal, either way"""
+        tip = arrow.rotation.getValue().multVec(coin.SbVec3f(0, 1, 0))
+        direction = App.Vector(*tip.getValue()).normalize()
+        normal = section.Planes[0].Rotation.multVec(App.Vector(0, 0, 1))
+        return math.degrees(math.acos(min(1.0, abs(direction.dot(normal)))))
+
+    def screen_position(self, scene, node):
+        """A widget position on the node and the direction along it, found with pick rays"""
+        region = self.view.getViewer().getSoRenderManager().getViewportRegion()
+        width, height = region.getViewportSizePixels().getValue()
+        hits = []
+        for y in range(0, height, 8):
+            for x in range(0, width, 8):
+                pick = coin.SoRayPickAction(region)
+                pick.setPoint(coin.SbVec2s(x, y))
+                pick.apply(scene)
+                point = pick.getPickedPoint()
+                if point and point.getPath().containsNode(node):
+                    hits.append((x, height - 1 - y))
+        if len(hits) < 2:
+            return None, None
+        (x0, y0), (x1, y1) = hits[0], hits[-1]
+        length = math.hypot(x1 - x0, y1 - y0)
+        x, y = hits[len(hits) // 2]
+        return QtCore.QPoint(x, y), ((x1 - x0) / length, (y1 - y0) / length)
+
+    def drag(self, start, direction, distance):
+        widget = self.view.graphicsView().viewport()
+
+        def send(kind, pos, buttons):
+            event = QtGui.QMouseEvent(
+                kind,
+                QtCore.QPointF(pos),
+                QtCore.QPointF(widget.mapToGlobal(pos)),
+                QtCore.Qt.LeftButton,
+                buttons,
+                QtCore.Qt.NoModifier,
+            )
+            QtWidgets.QApplication.sendEvent(widget, event)
+            process_events()
+
+        send(QtCore.QEvent.MouseMove, start, QtCore.Qt.NoButton)
+        send(QtCore.QEvent.MouseButtonPress, start, QtCore.Qt.LeftButton)
+        pos = start
+        for step in range(1, 13):
+            offset = distance * step / 12
+            pos = start + QtCore.QPoint(round(direction[0] * offset), round(direction[1] * offset))
+            send(QtCore.QEvent.MouseMove, pos, QtCore.Qt.LeftButton)
+        send(QtCore.QEvent.MouseButtonRelease, pos, QtCore.Qt.NoButton)
+        for _ in range(5):
+            process_events()
 
 
 if __name__ == "__main__":
