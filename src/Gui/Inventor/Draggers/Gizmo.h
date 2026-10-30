@@ -115,7 +115,7 @@ public:
     GizmoPlacement getDraggerPlacement() override;
     void setDraggerPlacement(const SbVec3f& pos, const SbVec3f& dir) override;
     void reverseDir();
-    // Returns the drag distance from the base of the feature
+    // Returns how much the value changed since the drag started
     double getDragLength();
     void setDragLength(double dragLength);
     void setGeometryScale(float scale) override;

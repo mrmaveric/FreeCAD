@@ -341,20 +341,7 @@ class TestSectionViewGui(unittest.TestCase):
             arrow = arrows[0].getTail()
             self.assertLess(self.arrow_error(section, arrow), 0.5)
 
-            # The window and the gizmos settle in the event loop, which can take a
-            # while when FreeCAD has just started
-            for _ in range(10):
-                self.view.viewIsometric()
-                self.view.fitAll()
-                for _ in range(3):
-                    Gui.runCommand("Std_ViewZoomOut")
-                process_events()
-                start, direction = self.screen_position(scene, arcs[0].getTail())
-                if start is not None:
-                    break
-                QtCore.QThread.msleep(200)
-            else:
-                self.skipTest("the tilt gizmo is not on the screen")
+            start, direction = self.find_on_screen(arcs[0].getTail())
             angle = section.Plane1AngleX.Value
             self.drag(start, direction, 72)
             if section.Plane1AngleX.Value == angle:
@@ -363,6 +350,78 @@ class TestSectionViewGui(unittest.TestCase):
         finally:
             Gui.getDocument(self.doc.Name).resetEdit()
             process_events()
+
+    def test_offset_arrow_drag_follows_cursor(self):
+        """Dragging the offset arrow away and back restores the offset, tilted or not"""
+        section = self.add_section()
+        Gui.getDocument(self.doc.Name).setEdit(section.Name)
+        try:
+            process_events()
+            arrows = self.gizmos("SoLinearDraggerContainer")
+            if not arrows:
+                self.skipTest("gizmos are disabled")
+            for tilt in (0, 25):
+                section.Plane1AngleX = tilt
+                process_events()
+                self.assertDragReturns(arrows[0], lambda: section.Plane1Offset.Value)
+        finally:
+            Gui.getDocument(self.doc.Name).resetEdit()
+            process_events()
+
+    def test_box_arrow_drag_follows_cursor(self):
+        """Dragging a face of the box away and back restores the box"""
+        section = self.add_section()
+        section.SectionType = "Box"
+        section.BoxPlacement.Base = App.Vector(-5, -5, -5)
+        Gui.getDocument(self.doc.Name).setEdit(section.Name)
+        try:
+            process_events()
+            # The offset arrow, then the min and max faces along X, Y and Z
+            arrows = self.gizmos("SoLinearDraggerContainer")
+            if not arrows:
+                self.skipTest("gizmos are disabled")
+            self.assertDragReturns(arrows[1], lambda: section.BoxPlacement.Base.x)
+            self.assertDragReturns(arrows[2], lambda: section.BoxLength.Value)
+        finally:
+            Gui.getDocument(self.doc.Name).resetEdit()
+            process_events()
+
+    def gizmos(self, type_name):
+        scene = self.view.getViewer().getSoRenderManager().getSceneGraph()
+        return [path.getTail() for path in self.find_paths(scene, type_name)]
+
+    def find_on_screen(self, node):
+        """A position on a gizmo and the direction along it, see screen_position"""
+        scene = self.view.getViewer().getSoRenderManager().getSceneGraph()
+        # The window and the gizmos settle in the event loop, which can take a
+        # while when FreeCAD has just started
+        for _ in range(10):
+            self.view.viewIsometric()
+            self.view.fitAll()
+            for _ in range(3):
+                Gui.runCommand("Std_ViewZoomOut")
+            process_events()
+            start, direction = self.screen_position(scene, node)
+            if start is not None:
+                return start, direction
+            QtCore.QThread.msleep(200)
+        self.skipTest("the gizmo is not on the screen")
+
+    def assertDragReturns(self, arrow, value):
+        """Drags an arrow gizmo away and back, the value must follow and return"""
+        start, direction = self.find_on_screen(arrow)
+        before = value()
+        values = {}
+
+        def record(step):
+            values[step] = value()
+
+        self.drag(start, direction, 60, back=True, on_step=record)
+        if values[12] == before:
+            self.skipTest("the simulated drag did not reach the arrow")
+        # Without a jump when the drag starts
+        self.assertLess(abs(values[1] - before), abs(values[12] - before) / 3)
+        self.assertAlmostEqual(value(), before, places=6)
 
     @staticmethod
     def find_paths(node, type_name):
@@ -405,7 +464,8 @@ class TestSectionViewGui(unittest.TestCase):
         position = QtCore.QPoint(round(x / ratio), round(y / ratio))
         return position, ((x1 - x0) / length, (y1 - y0) / length)
 
-    def drag(self, start, direction, distance):
+    def drag(self, start, direction, distance, back=False, on_step=None):
+        """Drags from start along direction, and back to start if back is set"""
         widget = self.view.graphicsView().viewport()
 
         def send(kind, pos, buttons):
@@ -423,10 +483,15 @@ class TestSectionViewGui(unittest.TestCase):
         send(QtCore.QEvent.MouseMove, start, QtCore.Qt.NoButton)
         send(QtCore.QEvent.MouseButtonPress, start, QtCore.Qt.LeftButton)
         pos = start
-        for step in range(1, 13):
+        steps = list(range(1, 13))
+        if back:
+            steps += list(range(11, -1, -1))
+        for step in steps:
             offset = distance * step / 12
             pos = start + QtCore.QPoint(round(direction[0] * offset), round(direction[1] * offset))
             send(QtCore.QEvent.MouseMove, pos, QtCore.Qt.LeftButton)
+            if on_step:
+                on_step(step)
         send(QtCore.QEvent.MouseButtonRelease, pos, QtCore.Qt.NoButton)
         for _ in range(5):
             process_events()

@@ -238,10 +238,12 @@ void LinearGizmo::reverseDir()
 
 double LinearGizmo::getDragLength()
 {
+    // Counted from where the drag started, so addFactor, which only shifts where the
+    // arrow is shown, doesn't apply
     double dragLength = dragger->translationIncrementCount.getValue()
         * dragger->translationIncrement.getValue();
 
-    return (dragLength - addFactor) / multFactor;
+    return dragLength / multFactor;
 }
 
 void LinearGizmo::setDragLength(double dragLength)
