@@ -228,6 +228,9 @@ bundle_linux() {
     fi
 
     cp "$JAMES_DIR/freecad-james.svg" "$dir/AppDir/$APP_ID.svg"
+    # appimagetool makes the AppImage's icon (.DirIcon) from a PNG or XPM only,
+    # since its build of 2026-10-29. freecad-james.png is the SVG at 256 pixels.
+    cp "$JAMES_DIR/freecad-james.png" "$dir/AppDir/$APP_ID.png"
     desktop_entry "AppRun %F" "$APP_ID" "$id" >"$dir/james.desktop"
     cat >"$dir/james-edition.sh" <<'EOF'
 # Runs inside create_bundle.sh, before the AppImage is created
