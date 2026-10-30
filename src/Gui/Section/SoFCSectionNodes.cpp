@@ -80,7 +80,35 @@ bool SoFCSectionFilter::isSectioned(const Stack& stack) const
 
 // ----------------------------------------------------------------------------
 
-std::atomic<int> SoFCSectionPass::filteredPasses {0};
+int SoFCSectionRouting::owner(const Stack& stack) const
+{
+    for (std::size_t i = 0; i < filters.size(); ++i) {
+        const auto& filter = filters[i];
+        if (!filter) {
+            return static_cast<int>(i);
+        }
+        switch (filter->relation(stack)) {
+            case SoFCSectionFilter::Relation::Ancestor:
+                // Decided further down
+                return Mixed;
+            case SoFCSectionFilter::Relation::Inside:
+                if (filter->sectionListed) {
+                    return static_cast<int>(i);
+                }
+                break;
+            case SoFCSectionFilter::Relation::Unrelated:
+                if (!filter->sectionListed) {
+                    return static_cast<int>(i);
+                }
+                break;
+        }
+    }
+    return Uncut;
+}
+
+// ----------------------------------------------------------------------------
+
+std::atomic<int> SoFCSectionPass::routedPasses {0};
 
 SO_NODE_SOURCE(SoFCSectionPass)
 
@@ -103,28 +131,24 @@ SoFCSectionPass::SoFCSectionPass()
 
 SoFCSectionPass::~SoFCSectionPass()
 {
-    if (filter) {
-        --filteredPasses;
+    if (routing) {
+        --routedPasses;
     }
 }
 
 void SoFCSectionPass::setup(
-    Mode passMode,
     const std::vector<SoClipPlane*>& planes,
     SoNode* content,
-    std::shared_ptr<const SoFCSectionFilter> passFilter
+    std::shared_ptr<const SoFCSectionRouting> passRouting,
+    int passSection
 )
 {
-    if (passFilter && passFilter->empty()) {
-        passFilter.reset();
-    }
-
     // Avoid touching the scene if nothing changed, it invalidates paths and caches
     std::vector<SoNode*> wanted(planes.begin(), planes.end());
     if (content) {
         wanted.push_back(content);
     }
-    bool same = mode == passMode && filter == passFilter
+    bool same = routing == passRouting && section == passSection
         && getNumChildren() == static_cast<int>(wanted.size());
     for (int i = 0; same && i < getNumChildren(); ++i) {
         same = getChild(i) == wanted[i];
@@ -134,7 +158,7 @@ void SoFCSectionPass::setup(
     }
 
     removeAllChildren();
-    mode = passMode;
+    section = passSection;
     for (auto plane : planes) {
         addChild(plane);
     }
@@ -142,18 +166,18 @@ void SoFCSectionPass::setup(
         addChild(content);
     }
 
-    if (filter && !passFilter) {
-        --filteredPasses;
+    if (routing && !passRouting) {
+        --routedPasses;
     }
-    else if (!filter && passFilter) {
-        ++filteredPasses;
+    else if (!routing && passRouting) {
+        ++routedPasses;
     }
-    filter = std::move(passFilter);
+    routing = std::move(passRouting);
 }
 
 bool SoFCSectionPass::traverseRoot(SoAction* action, const SoFCSectionFilter::Stack& stack)
 {
-    if (filteredPasses.load(std::memory_order_relaxed) == 0) {
+    if (routedPasses.load(std::memory_order_relaxed) == 0) {
         return true;
     }
 
@@ -170,7 +194,7 @@ bool SoFCSectionPass::traverseRoot(SoAction* action, const SoFCSectionFilter::St
             break;
         }
     }
-    if (!pass || !pass->filter) {
+    if (!pass || !pass->routing) {
         return true;
     }
 
@@ -180,13 +204,8 @@ bool SoFCSectionPass::traverseRoot(SoAction* action, const SoFCSectionFilter::St
         SoCacheElement::invalidate(action->getState());
     }
 
-    const auto relation = pass->filter->relation(stack);
-    if (relation == SoFCSectionFilter::Relation::Ancestor) {
-        return true;
-    }
-    const bool sectioned = (relation == SoFCSectionFilter::Relation::Inside)
-        == pass->filter->sectionListed;
-    return sectioned == (pass->mode == Mode::Clipped);
+    const int owner = pass->routing->owner(stack);
+    return owner == SoFCSectionRouting::Mixed || owner == pass->section;
 }
 
 // ----------------------------------------------------------------------------
@@ -224,27 +243,59 @@ void SoFCSectionRoot::setContent(SoNode* node)
         content->unref();
     }
     content = node;
-    clearSection();
+    clearSections();
 }
 
-void SoFCSectionRoot::clearSection()
+void SoFCSectionRoot::clearSections()
 {
-    std::vector<PassSetup> passes(1);
-    setSection(passes, nullptr, nullptr);
-    sectioned = false;
+    setSections({});
 }
 
-void SoFCSectionRoot::setSection(
-    const std::vector<PassSetup>& passes,
-    std::shared_ptr<const SoFCSectionFilter> filter,
-    SoNode* caps
-)
+void SoFCSectionRoot::setSections(const std::vector<Section>& sections)
 {
+    // With several sections, or one that doesn't cut everything, each pass only
+    // renders the objects of its section
+    std::shared_ptr<const SoFCSectionRouting> newRouting;
+    bool cutsAll = false;
+    if (sections.size() > 1 || (sections.size() == 1 && sections.front().filter)) {
+        auto candidate = std::make_shared<SoFCSectionRouting>();
+        for (const auto& section : sections) {
+            candidate->filters.push_back(section.filter);
+            cutsAll = cutsAll || !section.filter;
+        }
+        // Keep the passes untouched if nothing changed
+        if (routing && *routing == *candidate) {
+            newRouting = routing;
+        }
+        else {
+            newRouting = std::move(candidate);
+        }
+    }
+    routing = newRouting;
+
+    struct PassSetup
+    {
+        const std::vector<SoClipPlane*>* planes;
+        int section;
+    };
+    static const std::vector<SoClipPlane*> noPlanes;
+    std::vector<PassSetup> passes;
+    for (std::size_t i = 0; i < sections.size(); ++i) {
+        for (const auto& planes : sections[i].passes) {
+            passes.push_back({&planes, static_cast<int>(i)});
+        }
+    }
+    if (routing && !cutsAll) {
+        passes.push_back({&noPlanes, SoFCSectionRouting::Uncut});
+    }
+    if (passes.empty()) {
+        passes.push_back({&noPlanes, 0});
+    }
+
     // Reuse the existing passes so that paths into the scene stay valid as far
     // as possible
-    const int numPasses = std::max<int>(1, static_cast<int>(passes.size()));
     int index = 0;
-    for (; index < numPasses; ++index) {
+    for (const auto& setup : passes) {
         SoFCSectionPass* pass = nullptr;
         if (index < getNumChildren() && getChild(index)->isOfType(SoFCSectionPass::getClassTypeId())) {
             pass = static_cast<SoFCSectionPass*>(getChild(index));
@@ -253,21 +304,19 @@ void SoFCSectionRoot::setSection(
             pass = new SoFCSectionPass;
             insertChild(pass, index);
         }
-        if (index < static_cast<int>(passes.size())) {
-            pass->setup(passes[index].mode, passes[index].planes, content, filter);
-        }
-        else {
-            pass->setup(SoFCSectionPass::Mode::Clipped, {}, content, nullptr);
-        }
+        pass->setup(*setup.planes, content, routing, setup.section);
+        ++index;
     }
 
     while (getNumChildren() > index) {
         removeChild(getNumChildren() - 1);
     }
-    if (caps) {
-        addChild(caps);
+    for (const auto& section : sections) {
+        if (section.caps) {
+            addChild(section.caps);
+        }
     }
-    sectioned = true;
+    sectioned = !sections.empty();
 }
 
 void SoFCSectionRoot::traversePrimary(SoAction* action)

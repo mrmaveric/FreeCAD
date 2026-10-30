@@ -1926,7 +1926,7 @@ void View3DInventorViewer::setOverrideMode(const std::string& mode)
     }
 
     // The cut faces follow the displayed geometry
-    if (auto section = Section::SectionScene::getAttached(this)) {
+    for (auto section : Section::SectionScene::getAttached(this)) {
         section->invalidateGeometry();
     }
 }

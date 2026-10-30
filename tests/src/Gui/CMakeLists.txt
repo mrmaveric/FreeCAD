@@ -29,6 +29,7 @@ add_executable(Gui_tests_run
         NavigationStylePinchTest.cpp
         NavigationStyleWheelTest.cpp
         SectionGeometryTest.cpp
+        SectionRoutingTest.cpp
         SelectionTest.cpp
         SoMouseWheelEventTest.cpp
 )

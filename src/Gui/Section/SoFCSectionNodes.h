@@ -80,6 +80,33 @@ private:
     std::unordered_set<SoNode*> heads;
 };
 
+/** Decides which of the shown sections renders an instance.
+ *
+ * Every instance is rendered once: cut by one section, or uncut if no section cuts
+ * it. Where several sections cut the same instance, the first one wins.
+ */
+class GuiExport SoFCSectionRouting
+{
+public:
+    using Stack = SoFCSectionFilter::Stack;
+
+    /// No section cuts the instance
+    static constexpr int Uncut = -1;
+    /// The instance has descendants with different owners
+    static constexpr int Mixed = -2;
+
+    /// The objects cut by each section in order of priority, null for all objects
+    std::vector<std::shared_ptr<const SoFCSectionFilter>> filters;
+
+    bool operator==(const SoFCSectionRouting& other) const
+    {
+        return filters == other.filters;
+    }
+
+    /// The index of the section that renders the instance and all below it, Uncut or Mixed
+    int owner(const Stack& stack) const;
+};
+
 /** One rendering pass of the sectioned scene.
  *
  * Holds the clip planes of the pass followed by the object group of the viewer.
@@ -94,25 +121,19 @@ public:
     static void finish();
     SoFCSectionPass();
 
-    enum class Mode
-    {
-        /// Renders the sectioned objects clipped by the planes of this pass
-        Clipped,
-        /// Renders the objects excluded from the section
-        Unclipped,
-    };
-
+    /** Configures the pass.
+     * @param planes the clip planes of the pass
+     * @param content the objects to render
+     * @param routing decides which objects the pass renders, null for all of them
+     * @param section the index of the section in @p routing whose objects the pass
+     * renders, SoFCSectionRouting::Uncut for the objects no section cuts
+     */
     void setup(
-        Mode mode,
         const std::vector<SoClipPlane*>& planes,
         SoNode* content,
-        std::shared_ptr<const SoFCSectionFilter> filter
+        std::shared_ptr<const SoFCSectionRouting> routing,
+        int section
     );
-
-    Mode getMode() const
-    {
-        return mode;
-    }
 
     /** Decides whether a SoFCSelectionRoot is traversed in the current pass.
      *
@@ -126,18 +147,18 @@ protected:
     ~SoFCSectionPass() override;
 
 private:
-    Mode mode {Mode::Clipped};
-    std::shared_ptr<const SoFCSectionFilter> filter;
+    std::shared_ptr<const SoFCSectionRouting> routing;
+    int section {0};
 
-    static std::atomic<int> filteredPasses;
+    static std::atomic<int> routedPasses;
 };
 
 /** Root of the physical objects of a 3D view.
  *
- * Without an active section it has a single pass without clip planes. With a
- * section it may render the objects in several passes, for instance to cut away
- * a corner of the model or to show excluded objects uncut, followed by the cap
- * faces.
+ * Without an active section it has a single pass without clip planes. With
+ * sections it may render the objects in several passes, for instance to cut away
+ * a corner of the model, to cut different objects with different sections or to
+ * show excluded objects uncut, followed by the cap faces.
  *
  * Only rendering and picking traverse all passes. Other actions only see the
  * first pass so they find every object exactly once.
@@ -158,24 +179,22 @@ public:
         return content;
     }
 
-    struct PassSetup
+    struct Section
     {
-        SoFCSectionPass::Mode mode {SoFCSectionPass::Mode::Clipped};
-        std::vector<SoClipPlane*> planes;
+        /// The clip planes of each pass rendering the objects the section cuts
+        std::vector<std::vector<SoClipPlane*>> passes;
+        /// The objects the section cuts, null for all objects
+        std::shared_ptr<const SoFCSectionFilter> filter;
+        /// Scene graph of the cap faces, may be null
+        SoNode* caps {nullptr};
     };
 
-    /** Configures the section.
-     * @param passes the passes to render. The first one must be Clipped.
-     * @param filter instances that are excluded from the section or the only ones sectioned
-     * @param caps scene graph of the cap faces, may be null
+    /** Shows sections.
+     * @param sections the sections in order of priority, see SoFCSectionRouting
      */
-    void setSection(
-        const std::vector<PassSetup>& passes,
-        std::shared_ptr<const SoFCSectionFilter> filter,
-        SoNode* caps
-    );
+    void setSections(const std::vector<Section>& sections);
     /// Restores the plain scene without any clipping
-    void clearSection();
+    void clearSections();
     bool hasSection() const
     {
         return sectioned;
@@ -198,6 +217,7 @@ private:
     void traversePrimary(SoAction* action);
 
     SoNode* content {nullptr};
+    std::shared_ptr<const SoFCSectionRouting> routing;
     bool sectioned {false};
 };
 

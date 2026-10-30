@@ -42,8 +42,9 @@ namespace Gui
 
 /** View provider of App::SectionView.
  *
- * While visible, it shows the section in all 3D views of the document. Only one
- * section view of a document is visible at a time.
+ * While visible, it shows the section in all 3D views of the document. Several
+ * section views can be visible as long as they cut different objects: showing one
+ * hides the others that cut the same objects.
  */
 class GuiExport ViewProviderSectionView: public ViewProviderDragger
 {
@@ -115,6 +116,7 @@ private:
     void scheduleActivation();
     void activate();
     void deactivate();
+    void hideOverlappingSections();
     void updateDisplaySettings();
     void updateFilter();
     void updatePlaneVisuals();

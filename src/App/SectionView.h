@@ -43,8 +43,8 @@ namespace App
  *
  * The object only stores how the model is cut. The cutting itself is done by the
  * 3D view on the displayed geometry, so the model stays untouched. While the
- * object is visible the section is shown, and at most one section view of a
- * document is visible at a time.
+ * object is visible the section is shown. Several section views of a document
+ * can be visible at a time as long as they cut different objects.
  *
  * A section is either defined by up to three planes or by a box. Each plane is
  * defined by a base plane (one of the principal planes or a reference to a

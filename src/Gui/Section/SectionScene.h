@@ -105,6 +105,9 @@ struct GuiExport SectionStats
  * Collects the tessellation displayed in the 3D views, cuts it with the section
  * planes and builds the cap faces. The resulting scene is shared by all 3D views
  * of the document.
+ *
+ * Several scenes can be shown at once. Each object is cut by the scene shown last
+ * among those that cut it.
  */
 class GuiExport SectionScene
 {
@@ -134,7 +137,7 @@ public:
      */
     void setFilter(const std::vector<App::SubObjectT>& items, bool sectionListed);
 
-    /// Makes the section visible in all 3D views of the document
+    /// Makes the section visible in all 3D views of the document, in front of other sections
     void attach();
     /// Removes the section from all 3D views
     void detach();
@@ -156,8 +159,11 @@ public:
      */
     App::DocumentObject* getPickedObject(const SoPath* path, std::string& subname) const;
 
-    /// The section scene that is currently attached to @p viewer, if any
-    static SectionScene* getAttached(const View3DInventorViewer* viewer);
+    /// Whether both scenes cut at least one same object, as far as their geometry is collected
+    bool cutsSameObjects(const SectionScene& other) const;
+
+    /// The section scenes that are currently attached to @p viewer
+    static std::vector<SectionScene*> getAttached(const View3DInventorViewer* viewer);
 
     /** Resolves a pick on a cap face of any section scene.
      * @see getPickedObject()

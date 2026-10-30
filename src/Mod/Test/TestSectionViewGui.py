@@ -39,6 +39,16 @@ class TestSectionViewGui(unittest.TestCase):
     def tearDown(self):
         App.closeDocument(self.doc.Name)
 
+    def add_box(self, name, x):
+        box = self.doc.addObject("Part::Box", name)
+        box.Length = 20
+        box.Width = 20
+        box.Height = 20
+        box.Placement.Base = App.Vector(x, 0, 0)
+        self.doc.recompute()
+        process_events()
+        return box
+
     def add_section(self, name="SectionView", offset=-10):
         section = self.doc.addObject("App::SectionView", name)
         section.Plane1Base = "XZ"
@@ -86,6 +96,23 @@ class TestSectionViewGui(unittest.TestCase):
                 return child
         return None
 
+    def all_caps(self, view=None):
+        root = self.section_root(view or self.view)
+        return [
+            root.getChild(i)
+            for i in range(root.getNumChildren())
+            if root.getChild(i).getName().getString() == "SectionCaps"
+        ]
+
+    def hits_top(self, x, y):
+        """Whether a ray straight down at (x, y) hits the top face of a box"""
+        manager = self.view.getViewer().getSoRenderManager()
+        pick = coin.SoRayPickAction(manager.getViewportRegion())
+        pick.setRay(coin.SbVec3f(x, y, 100), coin.SbVec3f(0, 0, -1))
+        pick.apply(manager.getSceneGraph())
+        point = pick.getPickedPoint()
+        return point is not None and abs(point.getPoint()[2] - 20) < 1e-3
+
     def clip_planes(self, pass_node):
         return self.count_type(pass_node, coin.SoClipPlane.getClassTypeId(), True)
 
@@ -118,7 +145,7 @@ class TestSectionViewGui(unittest.TestCase):
         caps = self.caps()
         self.assertEqual(self.count_type(caps, coin.SoIndexedFaceSet.getClassTypeId()), 0)
 
-    def test_only_one_section_is_shown(self):
+    def test_sections_cutting_the_same_objects_replace_each_other(self):
         first = self.add_section("First")
         second = self.add_section("Second")
         self.assertFalse(first.Visibility)
@@ -126,6 +153,51 @@ class TestSectionViewGui(unittest.TestCase):
         first.Visibility = True
         process_events()
         self.assertFalse(second.Visibility)
+
+    def sections_of_different_objects(self):
+        """Shows a section of the box and a section of another box together"""
+        other = self.add_box("Other", 40)
+        first = self.add_section("First")
+        first.ObjectMode = "Section only"
+        first.Objects = [(self.box, "")]
+        # A new section cuts everything, so it hides the first one until it is limited
+        second = self.add_section("Second", offset=-5)
+        self.assertFalse(first.Visibility)
+        second.ObjectMode = "Section only"
+        second.Objects = [(other, "")]
+        first.Visibility = True
+        process_events()
+        return first, second, other
+
+    def test_sections_of_different_objects_are_shown_together(self):
+        self.assertTrue(self.hits_top(10, 7))
+        first, second, _ = self.sections_of_different_objects()
+        self.assertTrue(first.Visibility)
+        self.assertTrue(second.Visibility)
+        # A pass for each section and one for the objects neither cuts
+        self.assertEqual([self.clip_planes(p) for p in self.passes()], [1, 1, 0])
+        caps = self.all_caps()
+        self.assertEqual(len(caps), 2)
+        for cap in caps:
+            self.assertGreater(self.count_type(cap, coin.SoIndexedFaceSet.getClassTypeId()), 0)
+        # Each box is only cut by its own section, at y = 10 and y = 5
+        self.assertFalse(self.hits_top(10, 7))
+        self.assertTrue(self.hits_top(10, 13))
+        self.assertTrue(self.hits_top(50, 7))
+        self.assertFalse(self.hits_top(50, 3))
+
+        first.Visibility = False
+        process_events()
+        self.assertTrue(self.hits_top(10, 7))
+        self.assertFalse(self.hits_top(50, 3))
+        self.assertEqual(len(self.all_caps()), 1)
+
+    def test_section_changed_to_cut_the_same_objects_hides_the_other(self):
+        first, second, other = self.sections_of_different_objects()
+        second.Objects = [(other, ""), (self.box, "")]
+        process_events()
+        self.assertTrue(second.Visibility)
+        self.assertFalse(first.Visibility)
 
     def test_combination_passes(self):
         section = self.add_section()
@@ -196,6 +268,17 @@ class TestSectionViewGui(unittest.TestCase):
         Gui.runCommand("Std_SectionView")
         process_events()
         self.assertTrue(section.Visibility)
+
+    def test_toggle_command_restores_all_sections(self):
+        first, second, _ = self.sections_of_different_objects()
+        Gui.runCommand("Std_SectionView")
+        process_events()
+        self.assertFalse(first.Visibility)
+        self.assertFalse(second.Visibility)
+        Gui.runCommand("Std_SectionView")
+        process_events()
+        self.assertTrue(first.Visibility)
+        self.assertTrue(second.Visibility)
 
     def test_delete_and_undo(self):
         self.doc.UndoMode = 1

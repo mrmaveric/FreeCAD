@@ -242,13 +242,6 @@ void ViewProviderSectionView::activate()
         return;
     }
 
-    // Only one section is shown at a time
-    for (auto other : obj->getDocument()->getObjectsOfType<App::SectionView>()) {
-        if (other != obj && other->Visibility.getValue()) {
-            other->Visibility.setValue(false);
-        }
-    }
-
     if (!scene) {
         scene = std::make_unique<Section::SectionScene>(getDocument());
     }
@@ -257,6 +250,28 @@ void ViewProviderSectionView::activate()
     updateSection();
     scene->attach();
     updatePlaneVisuals();
+    hideOverlappingSections();
+}
+
+void ViewProviderSectionView::hideOverlappingSections()
+{
+    auto obj = getSectionView();
+    if (!obj || !scene) {
+        return;
+    }
+    // Sections are shown together as long as each object is cut by one of them
+    for (auto other : obj->getDocument()->getObjectsOfType<App::SectionView>()) {
+        if (other == obj || !other->Visibility.getValue()) {
+            continue;
+        }
+        auto vp = freecad_cast<ViewProviderSectionView*>(
+            Application::Instance->getViewProvider(other)
+        );
+        // A section that isn't shown yet checks for itself when it is
+        if (vp && vp->scene && scene->cutsSameObjects(*vp->scene)) {
+            other->Visibility.setValue(false);
+        }
+    }
 }
 
 void ViewProviderSectionView::deactivate()
@@ -350,6 +365,7 @@ void ViewProviderSectionView::updateData(const App::Property* prop)
     if (obj && !obj->isRestoring()) {
         if (prop == &obj->Objects || prop == &obj->ObjectMode) {
             updateFilter();
+            hideOverlappingSections();
         }
         else if (prop == &obj->Planes) {
             // Every change of the section definition ends up here

@@ -21,9 +21,14 @@
  *                                                                          *
  ***************************************************************************/
 
+#include <map>
+#include <vector>
+
 #include <Inventor/actions/SoGetBoundingBoxAction.h>
 
+#include <App/Application.h>
 #include <App/Document.h>
+#include <App/DocumentObserver.h>
 #include <App/SectionView.h>
 
 #include "Action.h"
@@ -41,17 +46,27 @@ using namespace Gui;
 namespace
 {
 
-App::SectionView* activeSectionView(App::Document* doc)
+std::vector<App::SectionView*> visibleSectionViews(App::Document* doc)
 {
-    if (!doc) {
-        return nullptr;
-    }
-    for (auto obj : doc->getObjectsOfType<App::SectionView>()) {
-        if (obj->Visibility.getValue()) {
-            return obj;
+    std::vector<App::SectionView*> visible;
+    if (doc) {
+        for (auto obj : doc->getObjectsOfType<App::SectionView>()) {
+            if (obj->Visibility.getValue()) {
+                visible.push_back(obj);
+            }
         }
     }
-    return nullptr;
+    return visible;
+}
+
+/// The sections Std_SectionView turned off in each document, to turn them on again
+std::map<const App::Document*, std::vector<App::DocumentObjectT>>& toggledOff()
+{
+    static std::map<const App::Document*, std::vector<App::DocumentObjectT>> sections;
+    [[maybe_unused]] static auto connection = App::GetApplication().signalDeleteDocument.connect(
+        [](const App::Document& doc) { sections.erase(&doc); }
+    );
+    return sections;
 }
 
 View3DInventorViewer* activeViewer()
@@ -108,7 +123,7 @@ void createSectionView(Gui::Document* guiDoc, View3DInventorViewer* viewer)
         }
     }
 
-    // Showing it makes it the active section
+    // Showing it hides the sections that cut the same objects
     obj->Visibility.setValue(true);
     if (auto vp = freecad_cast<ViewProviderSectionView*>(guiDoc->getViewProvider(obj))) {
         guiDoc->setEdit(vp, ViewProvider::Default);
@@ -129,7 +144,7 @@ StdCmdSectionView::StdCmdSectionView()
     sGroup = "Standard-View";
     sMenuText = QT_TR_NOOP("Section View");
     sToolTipText = QT_TR_NOOP(
-        "Toggles the section view of the active document.\n"
+        "Toggles the section views of the active document.\n"
         "Cuts the model with planes or a box without changing it and fills the cut faces.\n"
         "Creates a section view if the document has none."
     );
@@ -148,22 +163,46 @@ void StdCmdSectionView::activated(int iMsg)
     }
     App::Document* doc = guiDoc->getDocument();
 
-    if (auto active = activeSectionView(doc)) {
-        // Turning the section off also ends editing it
-        auto vp = guiDoc->getViewProvider(active);
-        if (vp && guiDoc->getInEdit() == vp) {
-            if (auto dialog = Gui::Control().activeDialog()) {
-                dialog->accept();
-                Gui::Control().closeDialog();
+    auto visible = visibleSectionViews(doc);
+    if (!visible.empty()) {
+        auto& remembered = toggledOff()[doc];
+        remembered.clear();
+        for (auto obj : visible) {
+            // Turning a section off also ends editing it
+            auto vp = guiDoc->getViewProvider(obj);
+            if (vp && guiDoc->getInEdit() == vp) {
+                if (auto dialog = Gui::Control().activeDialog()) {
+                    dialog->accept();
+                    Gui::Control().closeDialog();
+                }
             }
+            obj->Visibility.setValue(false);
+            remembered.emplace_back(obj);
         }
-        active->Visibility.setValue(false);
         return;
     }
 
-    auto sections = doc->getObjectsOfType<App::SectionView>();
+    // Turn on the sections that were turned off, or else the last one
+    std::vector<App::SectionView*> sections;
+    if (auto it = toggledOff().find(doc); it != toggledOff().end()) {
+        for (const auto& objT : it->second) {
+            auto obj = freecad_cast<App::SectionView*>(objT.getObject());
+            if (obj && obj->getDocument() == doc) {
+                sections.push_back(obj);
+            }
+        }
+        toggledOff().erase(it);
+    }
+    if (sections.empty()) {
+        sections = doc->getObjectsOfType<App::SectionView>();
+        if (sections.size() > 1) {
+            sections.erase(sections.begin(), sections.end() - 1);
+        }
+    }
     if (!sections.empty()) {
-        sections.back()->Visibility.setValue(true);
+        for (auto obj : sections) {
+            obj->Visibility.setValue(true);
+        }
         return;
     }
 
@@ -174,7 +213,7 @@ bool StdCmdSectionView::isActive()
 {
     auto viewer = activeViewer();
     if (_pcAction) {
-        _pcAction->setBlockedChecked(viewer && activeSectionView(getActiveDocument()));
+        _pcAction->setBlockedChecked(viewer && !visibleSectionViews(getActiveDocument()).empty());
     }
     return viewer != nullptr;
 }

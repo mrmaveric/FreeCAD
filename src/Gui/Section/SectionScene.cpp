@@ -122,9 +122,10 @@ void parallelFor(std::size_t count, Func&& func)
     }
 }
 
-std::map<const View3DInventorViewer*, SectionScene*>& attachedScenes()
+/// The scenes shown in each viewer, in order of priority
+std::map<const View3DInventorViewer*, std::vector<SectionScene*>>& attachedScenes()
 {
-    static std::map<const View3DInventorViewer*, SectionScene*> scenes;
+    static std::map<const View3DInventorViewer*, std::vector<SectionScene*>> scenes;
     return scenes;
 }
 
@@ -586,6 +587,8 @@ public:
 
     std::vector<QPointer<View3DInventorViewer>> viewers;
     bool attached {false};
+    /// When the scene was attached, the scene attached last wins where scenes cut the same objects
+    uint64_t attachOrder {0};
 
     QTimer geometryTimer;
     std::unique_ptr<SoNodeSensor> cameraSensor;
@@ -652,39 +655,47 @@ public:
         return nullptr;
     }
 
-    std::vector<SoFCSectionRoot::PassSetup> passSetups() const
+    /// The clip planes of the passes rendering the objects this section cuts
+    std::vector<std::vector<SoClipPlane*>> passPlanes() const
     {
-        std::vector<SoFCSectionRoot::PassSetup> passes;
+        std::vector<std::vector<SoClipPlane*>> passes;
         const std::size_t count = planes.size();
         if (count == 0) {
             passes.emplace_back();
         }
         else if (combination == Combination::KeepCommon || count == 1) {
-            SoFCSectionRoot::PassSetup pass;
-            for (const auto& plane : keptPlanes) {
-                pass.planes.push_back(plane);
-            }
-            passes.push_back(pass);
+            passes.emplace_back(keptPlanes.begin(), keptPlanes.end());
         }
         else {
             // The kept region is the union of the kept half-spaces. Render it as
             // disjoint pieces so transparent objects aren't drawn twice.
             for (std::size_t k = 0; k < count; ++k) {
-                SoFCSectionRoot::PassSetup pass;
-                pass.planes.push_back(keptPlanes[k]);
-                for (std::size_t j = 0; j < k; ++j) {
-                    pass.planes.push_back(removedPlanes[j]);
-                }
-                passes.push_back(pass);
+                std::vector<SoClipPlane*> pass {keptPlanes[k]};
+                pass.insert(pass.end(), removedPlanes.begin(), removedPlanes.begin() + k);
+                passes.push_back(std::move(pass));
             }
         }
-
-        if (filter && !filter->empty()) {
-            SoFCSectionRoot::PassSetup unclipped;
-            unclipped.mode = SoFCSectionPass::Mode::Unclipped;
-            passes.push_back(unclipped);
-        }
         return passes;
+    }
+
+    /// Shows the sections attached to @p viewer in it
+    static void updateViewer(View3DInventorViewer* viewer)
+    {
+        if (!viewer->getSectionRoot()) {
+            return;
+        }
+        std::vector<SoFCSectionRoot::Section> sections;
+        auto& scenes = attachedScenes();
+        if (auto it = scenes.find(viewer); it != scenes.end()) {
+            for (auto scene : it->second) {
+                SoFCSectionRoot::Section section;
+                section.passes = scene->d->passPlanes();
+                section.filter = scene->d->filter;
+                section.caps = scene->d->capsRoot;
+                sections.push_back(std::move(section));
+            }
+        }
+        viewer->getSectionRoot()->setSections(sections);
     }
 
     void attachViewer(View3DInventorViewer* viewer)
@@ -692,14 +703,15 @@ public:
         if (!viewer || !viewer->getSectionRoot()) {
             return;
         }
-        auto& scenes = attachedScenes();
-        auto it = scenes.find(viewer);
-        if (it != scenes.end() && it->second != owner) {
-            // Another section is active in this view
-            it->second->d->detachViewer(viewer);
+        // Other sections stay, each cuts its own objects
+        auto& shown = attachedScenes()[viewer];
+        if (std::find(shown.begin(), shown.end(), owner) == shown.end()) {
+            shown.push_back(owner);
         }
-        scenes[viewer] = owner;
-        viewer->getSectionRoot()->setSection(passSetups(), filter, capsRoot);
+        std::stable_sort(shown.begin(), shown.end(), [](SectionScene* a, SectionScene* b) {
+            return a->d->attachOrder > b->d->attachOrder;
+        });
+        updateViewer(viewer);
         if (std::find(viewers.begin(), viewers.end(), viewer) == viewers.end()) {
             viewers.emplace_back(viewer);
         }
@@ -716,12 +728,12 @@ public:
     void detachViewer(View3DInventorViewer* viewer)
     {
         auto& scenes = attachedScenes();
-        auto it = scenes.find(viewer);
-        if (it != scenes.end() && it->second == owner) {
-            scenes.erase(it);
-            if (viewer->getSectionRoot()) {
-                viewer->getSectionRoot()->clearSection();
+        if (auto it = scenes.find(viewer); it != scenes.end()) {
+            std::erase(it->second, owner);
+            if (it->second.empty()) {
+                scenes.erase(it);
             }
+            updateViewer(viewer);
         }
         std::erase_if(viewers, [viewer](const auto& ptr) { return !ptr || ptr == viewer; });
         if (cameraViewer == viewer) {
@@ -737,7 +749,7 @@ public:
         }
         for (const auto& viewer : viewers) {
             if (viewer) {
-                viewer->getSectionRoot()->setSection(passSetups(), filter, capsRoot);
+                updateViewer(viewer);
             }
         }
     }
@@ -1454,7 +1466,9 @@ void SectionScene::setFilter(const std::vector<App::SubObjectT>& items, bool sec
 
 void SectionScene::attach()
 {
+    static uint64_t attachCounter = 0;
     d->attached = true;
+    d->attachOrder = ++attachCounter;
     for (auto viewer : d->documentViewers()) {
         d->attachViewer(viewer);
     }
@@ -1538,11 +1552,24 @@ App::DocumentObject* SectionScene::getPickedObject(const SoPath* path, std::stri
     return d->pickedObject(path, subname);
 }
 
-SectionScene* SectionScene::getAttached(const View3DInventorViewer* viewer)
+bool SectionScene::cutsSameObjects(const SectionScene& other) const
+{
+    std::set<SoFCSectionFilter::Stack> cut;
+    for (const auto& instance : other.d->instances) {
+        if (instance.sectioned) {
+            cut.insert(instance.stack);
+        }
+    }
+    return std::ranges::any_of(d->instances, [&cut](const auto& instance) {
+        return instance.sectioned && cut.contains(instance.stack);
+    });
+}
+
+std::vector<SectionScene*> SectionScene::getAttached(const View3DInventorViewer* viewer)
 {
     auto& scenes = attachedScenes();
     auto it = scenes.find(viewer);
-    return it != scenes.end() ? it->second : nullptr;
+    return it != scenes.end() ? it->second : std::vector<SectionScene*>();
 }
 
 App::DocumentObject* SectionScene::resolvePickedCap(const SoPath* path, std::string& subname)
