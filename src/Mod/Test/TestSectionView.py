@@ -150,6 +150,68 @@ class TestSectionView(unittest.TestCase):
         self.section.Plane1Offset = -15
         self.assertAlmostEqual(self.section.Planes[0].Base.z, 25)
 
+    def test_principal_base_clears_reference(self):
+        try:
+            import Part  # noqa: F401
+        except ImportError:
+            self.skipTest("Part module not available")
+        box = self.doc.addObject("Part::Box", "Box")
+        self.doc.recompute()
+        self.doc.UndoMode = 1
+        section = self.section
+        section.Plane1Base = "Reference"
+        section.Plane1Reference = (box, "Face6")
+        # Set before choosing the reference as the base, which keeps it
+        section.Plane2Reference = (box, "Face1")
+        self.doc.recompute()
+        self.assertEqual(section.Plane2Reference[0], box)
+
+        self.doc.openTransaction("Use the XY plane")
+        section.Plane1Base = "XY"
+        self.doc.commitTransaction()
+        self.assertIsNone(section.Plane1Reference)
+        section.Plane2Base = "XZ"
+        self.assertIsNone(section.Plane2Reference)
+        self.assertNotIn(section, box.InList)
+        self.doc.recompute()
+        self.assertTrue(section.isValid())
+
+        self.doc.undo()
+        self.assertEqual(section.Plane1Base, "Reference")
+        self.assertEqual(section.Plane1Reference, (box, ["Face6"]))
+        self.doc.redo()
+        self.assertEqual(section.Plane1Base, "XY")
+        self.assertIsNone(section.Plane1Reference)
+
+    def test_deleted_reference(self):
+        try:
+            import Part  # noqa: F401
+        except ImportError:
+            self.skipTest("Part module not available")
+        box = self.doc.addObject("Part::Box", "Box")
+        self.doc.recompute()
+        self.doc.UndoMode = 1
+        section = self.section
+        section.Plane1Base = "Reference"
+        section.Plane1Reference = (box, "Face6")
+        self.doc.recompute()
+        top = App.Placement(section.Planes[0])
+
+        self.doc.openTransaction("Delete box")
+        self.doc.removeObject(box.Name)
+        self.doc.commitTransaction()
+        self.assertIsNone(section.Plane1Reference)
+        self.doc.recompute()
+        # The plane still uses the missing reference, so it reports it and falls back to XY
+        self.assertFalse(section.isValid())
+        self.assertVector(normal(section.Planes[0]), (0, 0, 1))
+        self.assertVector(section.Planes[0].Base, (0, 0, 0))
+
+        self.doc.undo()
+        self.doc.recompute()
+        self.assertTrue(section.isValid())
+        self.assertTrue(section.Planes[0].isSame(top, 1e-7))
+
     def test_invalid_reference(self):
         try:
             import Part  # noqa: F401

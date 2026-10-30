@@ -294,6 +294,39 @@ class TestSectionViewGui(unittest.TestCase):
         process_events()
         self.assertEqual(self.clip_planes(self.passes()[0]), 1)
 
+    def test_principal_base_stops_picking_the_reference(self):
+        section = self.add_section()
+        Gui.getDocument(self.doc.Name).setEdit(section.Name)
+        try:
+            process_events()
+            # Only the page of the first plane is shown, panels of earlier tests may
+            # still exist hidden
+            window = Gui.getMainWindow()
+            base = [
+                c
+                for c in window.findChildren(QtWidgets.QComboBox)
+                if c.isVisible() and c.count() == 4 and c.itemText(3) == "Reference"
+            ][0]
+            select = [
+                b
+                for b in window.findChildren(QtWidgets.QPushButton)
+                if b.isVisible() and b.isCheckable() and b.text().startswith("Select")
+            ][0]
+
+            # Choosing Reference without one starts picking it
+            base.setCurrentIndex(3)
+            process_events()
+            self.assertEqual(section.Plane1Base, "Reference")
+            self.assertTrue(select.isChecked())
+
+            base.setCurrentIndex(0)
+            process_events()
+            self.assertEqual(section.Plane1Base, "XY")
+            self.assertFalse(select.isChecked())
+        finally:
+            Gui.getDocument(self.doc.Name).resetEdit()
+            process_events()
+
     def test_offset_arrow_follows_tilt_drag(self):
         """After tilting the plane with its gizmo, the offset arrow points along the new normal"""
         section = self.add_section()

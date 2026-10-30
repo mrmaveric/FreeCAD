@@ -50,6 +50,7 @@ namespace App
  * defined by a base plane (one of the principal planes or a reference to a
  * planar face, datum plane, sketch etc.), an offset along its normal and two
  * tilt angles. The normal of a plane points to the side that is cut away.
+ * Choosing a principal plane as the base clears the reference of the plane.
  */
 class AppExport SectionView: public DocumentObject
 {

@@ -29,6 +29,7 @@
 
 #include "ComplexGeoData.h"
 #include "ComplexGeoDataPy.h"
+#include "Document.h"
 #include "ElementNamingUtils.h"
 #include "SectionView.h"
 
@@ -57,7 +58,8 @@ const char* SectionView::ObjectModeEnums[] = {"Exclude", "Section only", nullptr
         (nullptr), \
         GROUP, \
         Prop_None, \
-        "Planar face, datum plane or other object defining the base plane" \
+        "Planar face, datum plane or other object defining the base plane\n" \
+        "Cleared when a principal plane is chosen as the base" \
     ); \
     ADD_PROPERTY_TYPE( \
         Plane##N##Offset, \
@@ -487,6 +489,17 @@ short SectionView::mustExecute() const
 
 void SectionView::onChanged(const Property* prop)
 {
+    const bool undoing = getDocument() && getDocument()->isPerformingTransaction();
+    if (!isRestoring() && !undoing) {
+        // A plane that isn't based on its reference anymore shouldn't keep depending on it
+        for (int i = 0; i < MaxPlanes; ++i) {
+            if (prop == &getBaseProperty(i) && getBasePlane(i) != BasePlane::Reference
+                && getReferenceProperty(i).getValue()) {
+                getReferenceProperty(i).setValue(nullptr);
+            }
+        }
+    }
+
     if (prop != &Planes && prop != &Label && prop != &Label2 && prop != &Visibility
         && !isRestoring()) {
         updatePlanes();

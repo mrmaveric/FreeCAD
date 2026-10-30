@@ -504,9 +504,13 @@ void TaskSectionView::connectSignals()
             this,
             withObject([this, i](App::SectionView* obj, int index) {
                 obj->getBaseProperty(i).setValue(index);
-                if (index == static_cast<int>(App::SectionView::BasePlane::Reference)
-                    && !obj->getReferenceProperty(i).getValue()) {
+                const bool isReference = index
+                    == static_cast<int>(App::SectionView::BasePlane::Reference);
+                if (isReference && !obj->getReferenceProperty(i).getValue()) {
                     setPickMode(PickMode::Reference, i);
+                }
+                else if (!isReference && pickMode == PickMode::Reference && pickPlane == i) {
+                    setPickMode(PickMode::None);
                 }
             })
         );
