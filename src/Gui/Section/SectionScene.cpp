@@ -566,6 +566,8 @@ public:
 
     Gui::Document* document;
     std::vector<CutPlane> planes;
+    /// The planes moved a little into the kept side, see cutPlane()
+    std::vector<CutPlane> cutPlanes;
     Combination combination {Combination::RemoveCommon};
     DisplaySettings settings;
 
@@ -944,6 +946,34 @@ public:
 
     // ---- caps --------------------------------------------------------------
 
+    /** The plane as it cuts the scene.
+     *
+     * Geometry on the plane, like a face the plane was placed on, is cut away.
+     * Otherwise the rounding of the graphics card would decide, which changes as
+     * the camera moves and makes the face flicker. So the plane is moved into the
+     * kept side by well above the float resolution of the coordinates.
+     */
+    CutPlane cutPlane(const CutPlane& plane) const
+    {
+        double scale = std::abs(plane.distance);
+        if (boundBox.IsValid()) {
+            scale = std::max(
+                {scale,
+                 boundBox.CalcDiagonalLength(),
+                 std::abs(boundBox.MinX),
+                 std::abs(boundBox.MaxX),
+                 std::abs(boundBox.MinY),
+                 std::abs(boundBox.MaxY),
+                 std::abs(boundBox.MinZ),
+                 std::abs(boundBox.MaxZ)}
+            );
+        }
+        constexpr double relativeTolerance = 1e-5;
+        CutPlane cut = plane;
+        cut.distance += std::max(scale * relativeTolerance, 1e-9);
+        return cut;
+    }
+
     double baseHatchSpacing() const
     {
         if (settings.hatchSpacing > 0.0) {
@@ -1014,8 +1044,9 @@ public:
             removedPlanes.emplace_back(new SoClipPlane);
             structureChanged = true;
         }
+        cutPlanes.clear();
         for (std::size_t i = 0; i < planes.size(); ++i) {
-            const auto& plane = planes[i];
+            const CutPlane plane = cutPlanes.emplace_back(cutPlane(planes[i]));
             keptPlanes[i]->plane.setValue(
                 SbPlane(toSb(plane.normal), static_cast<float>(plane.distance))
             );
@@ -1047,7 +1078,7 @@ public:
 
     void buildPlaneCaps(std::size_t planeIndex)
     {
-        const CutPlane& plane = planes[planeIndex];
+        const CutPlane& plane = cutPlanes[planeIndex];
 
         auto group = new SoSeparator;
         // A cap only exists where the other planes cut material away (corner)
@@ -1211,7 +1242,7 @@ public:
             if (!cap.hatchGroup) {
                 return;
             }
-            const CutPlane& plane = planes[cap.plane];
+            const CutPlane& plane = cutPlanes[cap.plane];
 
             // Neighboring objects get different patterns. The pattern only depends
             // on the object, so it doesn't change while the plane moves.
@@ -1252,7 +1283,7 @@ public:
             if (!cap.hatchGroup || lines.empty()) {
                 continue;
             }
-            const CutPlane& plane = planes[cap.plane];
+            const CutPlane& plane = cutPlanes[cap.plane];
             Base::Vector3d uDir;
             Base::Vector3d vDir;
             plane.getAxes(uDir, vDir);

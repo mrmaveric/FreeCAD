@@ -199,6 +199,64 @@ class TestSectionViewGui(unittest.TestCase):
         self.assertTrue(second.Visibility)
         self.assertFalse(first.Visibility)
 
+    def test_face_on_plane_is_cut_from_every_angle(self):
+        """A face the plane lies on is cut away, wherever the camera is"""
+        top = [i for i, f in enumerate(self.box.Shape.Faces) if f.normalAt(0.5, 0.5).z > 0.5][0]
+        colors = [(0.2, 0.2, 0.9)] * len(self.box.Shape.Faces)
+        colors[top] = (0.1, 0.9, 0.1)
+        self.box.ViewObject.DiffuseColor = colors
+        section = self.add_section()
+        section.Plane1Base = "XY"
+        section.Plane1Offset = 20
+        section.ViewObject.FillMode = "Uniform color"
+        section.ViewObject.FillColor = (0.9, 0.1, 0.1)
+        section.ViewObject.HatchPattern = "None"
+        section.ViewObject.ShowOutline = False
+        process_events()
+
+        # The cut face replaces the top face
+        for angle, (face, cap) in self.render_from_above().items():
+            self.assertLess(face, 20, angle)
+            self.assertGreater(cap, 20, angle)
+
+        # With the box on the cut away side, nothing is left
+        section.Plane1Flipped = True
+        process_events()
+        for angle, (face, cap) in self.render_from_above().items():
+            self.assertLess(face, 20, angle)
+            self.assertLess(cap, 20, angle)
+
+    def render_from_above(self):
+        """Pixels of the green top face and the red cut face, by elevation and azimuth"""
+        results = {}
+        # The navigation cube could cover the model
+        viewer = self.view.getViewer()
+        navi_cube = viewer.isEnabledNaviCube()
+        viewer.setEnabledNaviCube(False)
+        try:
+            for elevation in (30, 60):
+                for azimuth in range(0, 360, 45):
+                    rotation = App.Rotation(App.Vector(0, 0, 1), azimuth)
+                    rotation *= App.Rotation(App.Vector(1, 0, 0), 90 - elevation)
+                    self.view.setCameraOrientation(rotation)
+                    self.view.fitAll()
+                    process_events()
+                    # What is on the screen, saveImage renders the scene again off screen
+                    widget = self.view.graphicsView().viewport()
+                    image = widget.grab().toImage().scaled(120, 120)
+                    # Only the middle, away from the axes in the corner
+                    green = red = 0
+                    for y in range(image.height() // 4, image.height() * 3 // 4, 2):
+                        for x in range(image.width() // 4, image.width() * 3 // 4, 2):
+                            color = QtGui.QColor(image.pixel(x, y))
+                            r, g, b = color.red(), color.green(), color.blue()
+                            green += g > 60 and g > 1.6 * max(r, b)
+                            red += r > 60 and r > 1.6 * max(g, b)
+                    results[(elevation, azimuth)] = (green, red)
+        finally:
+            viewer.setEnabledNaviCube(navi_cube)
+        return results
+
     def test_combination_passes(self):
         section = self.add_section()
         section.Plane2Enabled = True
