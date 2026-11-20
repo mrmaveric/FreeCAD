@@ -590,6 +590,8 @@ TreeWidget::TreeWidget(const char* name, QWidget* parent)
 
     this->setDragEnabled(true);
     this->setAcceptDrops(true);
+    // The tree marks where a drop goes itself, as Qt doesn't know
+    this->setDropIndicatorShown(false);
     this->setColumnCount(3);
     this->setItemDelegate(new TreeWidgetItemDelegate(this));
     this->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -2205,6 +2207,7 @@ void TreeWidget::startDrag(Qt::DropActions supportedActions)
 {
     Base::StateLocker guard(_DraggingActive);
     QTreeWidget::startDrag(supportedActions);
+    setDropMarker(nullptr);
     if (_DragEventFilter) {
         _DragEventFilter = false;
         qApp->removeEventFilter(this);
@@ -2224,6 +2227,7 @@ void TreeWidget::dragEnterEvent(QDragEnterEvent* event)
 void TreeWidget::dragLeaveEvent(QDragLeaveEvent* event)
 {
     QTreeWidget::dragLeaveEvent(event);
+    setDropMarker(nullptr);
 }
 
 
@@ -2370,8 +2374,13 @@ void TreeWidget::dragMoveEvent(QDragMoveEvent* event)
         event->accept();
     }
 
-
     TargetItemInfo targetInfo = getTargetInfo(event);
+    checkDropTarget(event, targetInfo);
+    setDropMarker(event->isAccepted() ? &targetInfo : nullptr);
+}
+
+void TreeWidget::checkDropTarget(QDragMoveEvent* event, TargetItemInfo& targetInfo)
+{
     QTreeWidgetItem* targetItem = targetInfo.targetItem;
     if (!targetItem) {
         event->ignore();
@@ -2399,7 +2408,7 @@ void TreeWidget::dragMoveEvent(QDragMoveEvent* event)
         Gui::ViewProviderDocumentObject* vp = targetItemObj->object();
 
         // if we are in between or if target doesn't accept drops then the target is the parent
-        if (da == Qt::MoveAction && (targetInfo.inThresholdZone || !vp->canDropObjects())) {
+        if (da == Qt::MoveAction && targetInfo.inThresholdZone) {
             targetInfo.targetItem = targetInfo.targetItem->parent();
             if (targetInfo.targetItem->type() == TreeWidget::DocumentType) {
                 leaveEvent(nullptr);
@@ -2514,13 +2523,105 @@ TreeWidget::TargetItemInfo TreeWidget::getTargetInfo(QEvent* ev)
     QRect itemRect = visualItemRect(targetInfo.targetItem);
     int mouseY = pos.y();
     int itemMidPoint = itemRect.top() + itemRect.height() / 2;
-    int threshold = itemRect.height() * 0.20;  // 20% of the item's height as threshold
+    int threshold = itemRect.height() / 4;
+    bool expanded = targetInfo.targetItem->isExpanded() && targetInfo.targetItem->childCount() > 0;
 
     targetInfo.inBottomHalf = mouseY > itemMidPoint;
-    targetInfo.inThresholdZone = ((mouseY < itemRect.top() + threshold)
-                                  && !targetInfo.targetItem->isExpanded())
-        || (mouseY > itemRect.top() + itemRect.height() - threshold);
+    // Near its top or bottom edge, a move goes before or after the item. The bottom edge of an
+    // expanded item is above its first child though, so that is in the item.
+    targetInfo.inThresholdZone = (mouseY < itemRect.top() + threshold)
+        || ((mouseY > itemRect.top() + itemRect.height() - threshold) && !expanded);
+    // Anywhere on an item that can't take the objects, a move goes before or after it
+    if (!targetInfo.inThresholdZone && targetInfo.targetItem->type() == TreeWidget::ObjectType) {
+        targetInfo.inThresholdZone = !canDropInto(targetInfo.targetItem);
+    }
     return targetInfo;
+}
+
+bool TreeWidget::canDropInto(QTreeWidgetItem* item)
+{
+    auto targetItemObj = static_cast<DocumentObjectItem*>(item);
+    Gui::ViewProviderDocumentObject* vp = targetItemObj->object();
+    if (!vp || !vp->canDropObjects()) {
+        return false;
+    }
+    try {
+        for (auto ti : selectedItems()) {
+            if (ti->type() != TreeWidget::ObjectType) {
+                return false;
+            }
+            auto draggedItem = static_cast<DocumentObjectItem*>(ti);
+            std::ostringstream str;
+            auto owner = draggedItem->getRelativeParent(str, targetItemObj);
+            auto subname = str.str();
+            auto obj = draggedItem->object()->getObject();
+            if (!vp->canDropObjectEx(obj, owner, subname.c_str(), draggedItem->mySubs)) {
+                return false;
+            }
+        }
+    }
+    catch (...) {
+        return false;
+    }
+    return true;
+}
+
+namespace
+{
+// The last row shown for an item, which is its own unless it's expanded
+QTreeWidgetItem* lastShownItem(QTreeWidgetItem* item)
+{
+    while (item->isExpanded()) {
+        int index = item->childCount() - 1;
+        while (index >= 0 && item->child(index)->isHidden()) {
+            --index;
+        }
+        if (index < 0) {
+            break;
+        }
+        item = item->child(index);
+    }
+    return item;
+}
+}  // namespace
+
+void TreeWidget::setDropMarker(const TargetItemInfo* targetInfo)
+{
+    // Marked like Qt does: a rectangle for the item, one with no height for a line
+    QRect marker;
+    if (targetInfo && targetInfo->underMouseItem) {
+        QTreeWidgetItem* item = targetInfo->underMouseItem;
+        QRect rect = visualItemRect(item);
+        rect.setRight(viewport()->width() - 1);
+        if (targetInfo->targetItem == item) {
+            marker = rect;
+        }
+        else if (!targetInfo->inBottomHalf) {
+            marker = QRect(rect.left(), rect.top(), rect.width(), 0);
+        }
+        else {
+            // After the item and what's shown below it
+            int bottom = visualItemRect(lastShownItem(item)).bottom();
+            marker = QRect(rect.left(), bottom, rect.width(), 0);
+        }
+    }
+    if (marker != dropMarker) {
+        dropMarker = marker;
+        viewport()->update();
+    }
+}
+
+void TreeWidget::paintEvent(QPaintEvent* event)
+{
+    QTreeWidget::paintEvent(event);
+    if (dropMarker.isNull()) {
+        return;
+    }
+    QPainter painter(viewport());
+    QStyleOption option;
+    option.initFrom(this);
+    option.rect = dropMarker;
+    style()->drawPrimitive(QStyle::PE_IndicatorItemViewItemDrop, &option, &painter, this);
 }
 
 bool TreeWidget::dropInDocument(
@@ -2795,7 +2896,7 @@ bool TreeWidget::dropInObject(
     }
 
     // if we are in between or if target doesn't accept drops then the target is the parent
-    if (da == Qt::MoveAction && (targetInfo.inThresholdZone || !vp->canDropObjects())) {
+    if (da == Qt::MoveAction && targetInfo.inThresholdZone) {
         targetInfo.targetItem = targetInfo.targetItem->parent();
         if (targetInfo.targetItem->type() == TreeWidget::DocumentType) {
             return dropInDocument(event, targetInfo, items);
@@ -3194,6 +3295,7 @@ void TreeWidget::dropEvent(QDropEvent* event)
 {
     // FIXME: This should actually be done inside dropMimeData
 
+    setDropMarker(nullptr);
     TargetItemInfo targetInfo = getTargetInfo(event);
     if (!targetInfo.targetItem) {
         return;
@@ -3308,6 +3410,12 @@ void TreeWidget::sortDroppedObjects(
                 Application::Instance->getViewProvider(sortedObjList[i])
             );
             vp->setTreeRank(i);
+        }
+
+        // The order is saved with the document, so a new one needs saving. No property
+        // changes, so nothing else tells the document.
+        if (sortedObjList != objList) {
+            guiDoc->setModified(true);
         }
 
         // Lastly we refresh the tree

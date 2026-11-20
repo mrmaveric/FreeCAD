@@ -159,6 +159,7 @@ protected:
     void dragLeaveEvent(QDragLeaveEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
     void dropEvent(QDropEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
 
 private:
     struct TargetItemInfo
@@ -168,9 +169,13 @@ private:
         App::Document* targetDoc = nullptr;
         QPoint pos;
         bool inBottomHalf = false;
-        bool inThresholdZone = false;
+        bool inThresholdZone = false;  // a move goes before or after underMouse
     };
     TargetItemInfo getTargetInfo(QEvent* ev);
+    bool canDropInto(QTreeWidgetItem* item);
+    void checkDropTarget(QDragMoveEvent* event, TargetItemInfo& targetInfo);
+    void setDropMarker(const TargetItemInfo* targetInfo);
+    QRect dropMarker;  // where a drop goes: the item, or a line between items
     using ObjectItemSubname = std::pair<DocumentObjectItem*, std::vector<std::string>>;
     bool dropInObject(QDropEvent* event, TargetItemInfo& targetInfo, std::vector<ObjectItemSubname> items);
     bool dropInDocument(
