@@ -16,7 +16,8 @@ APP_NAME="FreeCAD (James Edition)"
 APP_ID="freecad-james"
 FILE_PREFIX="FreeCAD_James_Edition"
 GITHUB_REPO="${GITHUB_REPO:-${GITHUB_REPOSITORY:-mrmaveric/FreeCAD}}"
-FEATURE_BRANCH="${FEATURE_BRANCH:-feature/section-view}"
+# The features are stacked: feature/tree-reorder is based on feature/section-view
+FEATURE_BRANCH="${FEATURE_BRANCH:-feature/tree-reorder}"
 UPSTREAM="https://github.com/FreeCAD/FreeCAD.git"
 # Releases older than this are never built automatically
 OLDEST_VERSION="26.3rc2"

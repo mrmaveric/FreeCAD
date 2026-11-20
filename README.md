@@ -1,8 +1,13 @@
 # FreeCAD (James Edition)
 
-FreeCAD releases with one addition: a non-destructive **section view** like the
-ones in SolidWorks, Onshape and Fusion 360. It cuts whole assemblies with
-movable planes or boxes, and the cut faces are filled and cross-hatched.
+FreeCAD releases with two additions:
+
+- A non-destructive **section view** like the ones in SolidWorks, Onshape and
+  Fusion 360. It cuts whole assemblies with movable planes or boxes, and the
+  cut faces are filled and cross-hatched.
+- **Reordering in the tree** that is easy to find: dragging an item shows where
+  it goes, and dropping it anywhere on an item that can't take it puts it
+  before or after that item.
 
 This repository is a fork of [FreeCAD](https://github.com/FreeCAD/FreeCAD).
 Builds for Linux and Windows are on the
@@ -50,7 +55,8 @@ first time it starts ("More info", "Run anyway").
 
 | Branch | |
 |---|---|
-| `feature/section-view` | The feature: FreeCAD's `main` plus its commits. All development happens here. |
+| `feature/section-view` | The section view: FreeCAD's `main` plus its commits. |
+| `feature/tree-reorder` | The tree reordering, on top of `feature/section-view`. The builds use this branch, so they have both. |
 | `james` | This tooling, the default branch: the installer, `freecad-james-update`, the packaging and the workflow. |
 | `james/VERSION` | Optional. The source of one release made by hand, e.g. with resolved conflicts. |
 | `main` | FreeCAD's `main`, as it was when the fork was made. Not used. |
@@ -60,7 +66,7 @@ for the newest FreeCAD release (and the newest release candidate, if that is
 newer). If there is no build of it with the current feature commits, it:
 
 1. takes the release tag from FreeCAD and cherry-picks the commits of
-   `feature/section-view` onto it, or uses `james/VERSION` if that exists,
+   `feature/tree-reorder` onto it, or uses `james/VERSION` if that exists,
 2. builds it for Linux and Windows the way FreeCAD builds its releases
    (`package/bundle` and the pixi environment of the release),
 3. packages it with FreeCAD's scripts, changed only in name, icon and desktop
@@ -80,8 +86,10 @@ by the workflow ([`packaging/ci.sh`](packaging/ci.sh)) and by
 
 ## Changing the feature
 
-Work in a clone of this repository on `feature/section-view`. To try a change,
-build it on your computer (needs [pixi](https://pixi.sh)):
+Work in a clone of this repository, on the branch of the feature. After a
+change to `feature/section-view`, rebase `feature/tree-reorder` onto it, as
+the builds only see what is on `feature/tree-reorder`. To try a change, build
+it on your computer (needs [pixi](https://pixi.sh)):
 
 ```bash
 freecad-james-update build          # newest release, with the feature from PATCH_REPO
@@ -94,7 +102,7 @@ That builds FreeCAD with the feature commits of the clone (default
 `26.3-local`. The first build takes about an hour, later ones are quicker
 because the source tree and the compiler cache are kept.
 
-When it's good, push `feature/section-view`. The next daily run builds and
+When it's good, push the branches you changed. The next daily run builds and
 publishes it. `freecad-james-update ci` starts it right away.
 
 ## When the feature conflicts with a new release

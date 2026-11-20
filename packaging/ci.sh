@@ -182,7 +182,7 @@ cmd_publish() {
     ((n > 1)) && title+=" build $n"
     {
         cat <<EOF
-FreeCAD [$version](https://github.com/FreeCAD/FreeCAD/releases/tag/$version) with the section view feature.
+FreeCAD [$version](https://github.com/FreeCAD/FreeCAD/releases/tag/$version) with a section view, and easier reordering in the tree.
 
 - **Linux:** \`$appimage\`. Install it with \`freecad-james-update\` (see the [README]($GITHUB_SERVER_URL/$GITHUB_REPO/tree/james#readme)), or make it executable and run it.
 $windows_line

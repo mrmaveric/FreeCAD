@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # freecad-james-update - install and update FreeCAD (James Edition)
 #
-# FreeCAD (James Edition) is FreeCAD with the section view feature. The GitHub
+# FreeCAD (James Edition) is FreeCAD with a few features added. The GitHub
 # workflow of the repository (see README.md) builds it for every FreeCAD
 # release. This tool downloads those builds as AppImages and installs them
 # with a launcher and a menu entry. It can also build a release on this
